@@ -55,7 +55,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  consolidate               Run one consolidation pass")
 		fmt.Fprintln(os.Stderr, "  status                    Show database statistics")
 		fmt.Fprintln(os.Stderr, "  query QUESTION            Ask a question against the knowledge base")
-		fmt.Fprintln(os.Stderr, "  serve [--host=H] [--port=P] Start HTTP API server (default 127.0.0.1:8080)")
+		fmt.Fprintln(os.Stderr, "  serve [--host=H] [--port=P] [--watch=PATH] Start HTTP API server (default 127.0.0.1:8080)")
 		fmt.Fprintln(os.Stderr, "  mcp                       Start MCP server (stdio transport)")
 		fmt.Fprintln(os.Stderr, "  export [--format=json|csv] [--output=path] Export knowledge base")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
@@ -116,15 +116,17 @@ func main() {
 		question := strings.Join(args[1:], " ")
 		runQuery(logger, *cfgPath, question)
 	case "serve":
-		hostFlag, portFlag := "", 0
+		hostFlag, portFlag, watchFlag := "", 0, ""
 		for _, a := range args[1:] {
 			if strings.HasPrefix(a, "--host=") {
 				hostFlag = a[7:]
 			} else if strings.HasPrefix(a, "--port=") {
 				fmt.Sscanf(a[7:], "%d", &portFlag)
+			} else if strings.HasPrefix(a, "--watch=") {
+				watchFlag = a[8:]
 			}
 		}
-		runServe(logger, *cfgPath, hostFlag, portFlag)
+		runServe(logger, *cfgPath, hostFlag, portFlag, watchFlag)
 	case "mcp":
 		runMCP(logger, *cfgPath)
 	case "export":
@@ -543,13 +545,47 @@ func runQuery(logger *slog.Logger, cfgPath, question string) {
 	fmt.Println(string(data))
 }
 
-func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int) {
+func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watchDir string) {
 	cfg := loadConfig(logger, cfgPath)
 	store := openStore(logger, cfg)
 	defer store.Close()
 
 	eng := createEngine(logger, cfg, store)
 	q := createQuerier(logger, cfg, store)
+
+	if watchDir == "" {
+		watchDir = cfg.Watcher.Path
+	}
+	if watchDir != "" {
+		adapter := ingest.NewBatchAdapter(eng, store, logger)
+		debounce := time.Duration(cfg.Watcher.DebounceSeconds) * time.Second
+		if debounce == 0 {
+			debounce = 2 * time.Second
+		}
+		process := func(ctx context.Context, dir string) error {
+			result, err := adapter.ProcessDir(ctx, dir)
+			if err != nil {
+				return err
+			}
+			if result.FilesProcessed > 0 {
+				logger.Info("watcher ingested files",
+					"files", result.FilesProcessed, "facts", result.FactsTotal)
+				if cfg.Watcher.ConsolidateAfterIngest {
+					runConsolidation(ctx, logger, cfg, store)
+				}
+			}
+			return nil
+		}
+		w, err := watcher.New(watchDir, watcher.Config{Debounce: debounce}, process)
+		if err != nil {
+			logger.Error("failed to create watcher", "error", err)
+			os.Exit(1)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go w.Run(ctx)
+		logger.Info("file watcher started", "path", watchDir)
+	}
 
 	addr := cfg.EffectiveAPIAddr()
 	if hostFlag != "" || portFlag != 0 {
