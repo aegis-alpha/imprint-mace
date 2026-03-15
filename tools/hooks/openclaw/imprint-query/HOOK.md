@@ -8,7 +8,8 @@ metadata: { "openclaw": { "emoji": "🔍", "events": ["message:preprocessed"] } 
 
 Fires on every `message:preprocessed` event. Sends the message body to Imprint's
 `GET /query` endpoint and pushes the answer into `event.messages` so the agent
-sees it as additional context.
+sees it as additional context. If `event.messages` is not present, the hook
+initializes it as an empty array before pushing.
 
 This is the deterministic auto-query -- it replaces the probabilistic "ALWAYS
 call imprint_query" instruction in agent skills.

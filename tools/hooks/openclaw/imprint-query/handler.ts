@@ -26,6 +26,9 @@ const handler = async (event: any) => {
     const data = await res.json();
     const answer = data?.answer;
     if (answer && typeof answer === "string" && answer.trim().length > 0) {
+      if (!Array.isArray(event.messages)) {
+        event.messages = [];
+      }
       event.messages.push(`[Imprint context] ${answer}`);
     }
   } catch (err: any) {
