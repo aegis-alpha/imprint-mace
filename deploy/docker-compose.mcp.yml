@@ -1,0 +1,5 @@
+services:
+  imprint:
+    command: ["mcp"]
+    ports: []
+    stdin_open: true

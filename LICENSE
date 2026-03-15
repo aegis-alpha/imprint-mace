@@ -1,0 +1,90 @@
+MIT License
+
+Copyright (c) 2026 2026 Aegis Alpha SA, bo-reez. 
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+Third-party components
+======================
+
+github.com/BurntSushi/toml v1.6.0
+License: MIT
+Copyright (c) 2013 TOML authors
+
+github.com/asg017/sqlite-vec-go-bindings v0.1.6
+License: Apache-2.0 (per parent project asg017/sqlite-vec)
+Copyright (c) Alex Garcia
+
+github.com/fsnotify/fsnotify v1.9.0
+License: BSD-3-Clause
+Copyright (c) 2012 The Go Authors. All rights reserved.
+Copyright (c) fsnotify Authors. All rights reserved.
+
+github.com/mark3labs/mcp-go v0.45.0
+License: MIT
+Copyright (c) 2024 Anthropic, PBC
+
+github.com/mattn/go-sqlite3 v1.14.34
+License: MIT
+Copyright (c) 2014 Yasuhiro Matsumoto
+
+github.com/oklog/ulid/v2 v2.1.1
+License: Apache-2.0
+Copyright 2016 The Oklog Authors
+
+gopkg.in/yaml.v3 v3.0.1
+License: MIT / Apache-2.0
+Copyright (c) 2006-2010 Kirill Simonov (MIT portions)
+Copyright (c) 2011-2019 Canonical Ltd (Apache-2.0 portions)
+
+github.com/bahlo/generic-list-go v0.2.0
+License: BSD-3-Clause
+Copyright (c) 2009 The Go Authors. All rights reserved.
+
+github.com/buger/jsonparser v1.1.1
+License: MIT
+Copyright (c) 2016 Leonid Bugaev
+
+github.com/google/uuid v1.6.0
+License: BSD-3-Clause
+Copyright (c) 2009, 2014 Google Inc. All rights reserved.
+
+github.com/invopop/jsonschema v0.13.0
+License: MIT
+Copyright (C) 2014 Alec Thomas
+
+github.com/mailru/easyjson v0.7.7
+License: MIT
+Copyright (c) 2016 Mail.Ru Group
+
+github.com/spf13/cast v1.7.1
+License: MIT
+Copyright (c) 2014 Steve Francia
+
+github.com/wk8/go-ordered-map/v2 v2.1.8
+License: Apache-2.0
+
+github.com/yosida95/uritemplate/v3 v3.0.2
+License: BSD-3-Clause
+Copyright (C) 2016, Kohei YOSHIDA. All rights reserved.
+
+golang.org/x/sys v0.22.0
+License: BSD-3-Clause
+Copyright 2009 The Go Authors.

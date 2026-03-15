@@ -1,0 +1,10 @@
+*.db
+*.db-wal
+*.db-shm
+imprint
+kuzu-bench
+research/
+archive/
+prompts/session-*.md
+.cursor/
+.git/

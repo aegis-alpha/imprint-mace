@@ -1,0 +1,22 @@
+services:
+  imprint:
+    image: ghcr.io/aegis-alpha/imprint-mace:main
+    volumes:
+      - ./data:/data
+      - ./config.toml:/etc/imprint/config.toml
+      - ./transcripts:/transcripts
+    command: ["serve"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+  watchtower:
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 300 --cleanup imprint
+    restart: unless-stopped

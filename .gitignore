@@ -1,0 +1,43 @@
+# Binary
+/imprint
+*.exe
+
+# Config with secrets
+config.toml
+
+# Database
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# Internal files (not part of open-source product)
+PROJECT.md
+BREAKING-CHANGES.md
+session-registry.md
+naming-conventions.md
+archive/
+research/
+prompts/session-*
+
+# Benchmark results (may contain real data)
+research/benchmarks/results/
+research/benchmarks/results-large/
+research/benchmarks/results-bob/
+research/benchmarks/test-data.json
+research/benchmarks/test-data-large.json
+
+# OS
+.DS_Store
+Thumbs.db

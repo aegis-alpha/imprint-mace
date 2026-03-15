@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Convert OpenClaw session JSONL to Imprint annotated markdown (D25).
+
+Usage:
+    openclaw-adapter <input> <output-dir>
+
+    <input>     Path to a .jsonl file or a directory of .jsonl files
+                (e.g. ~/.openclaw/agents/<agent>/sessions/<key>.jsonl)
+    <output-dir> Directory where .md files are written
+
+OpenClaw JSONL schema (per line):
+    type: "message" (filter on this)
+    timestamp: ISO-8601
+    message.role: "user"|"assistant"|"tool"
+    message.content: string or [{"type": "text", "text": "..."}]
+
+Tool-role messages are stripped. Only user + assistant content kept.
+Tree structure (parentId) is ignored; messages are taken in file order (chronological).
+"""
+
+import json
+import sys
+from pathlib import Path
+
+
+def extract_text(content) -> str:
+    """Extract text from content that may be a string or an array of blocks."""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        texts = []
+        for block in content:
+            if block.get("type") == "text":
+                text = block.get("text", "").strip()
+                if text:
+                    texts.append(text)
+        return "\n".join(texts)
+    return ""
+
+
+def convert_file(jsonl_path: Path, output_dir: Path) -> Path:
+    session_id = jsonl_path.stem
+    messages = []
+    first_timestamp = None
+
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+
+            if obj.get("type") != "message":
+                continue
+
+            msg = obj.get("message", {})
+            role = msg.get("role")
+            if role not in ("user", "assistant"):
+                continue
+
+            timestamp = obj.get("timestamp", "")
+            if first_timestamp is None and timestamp:
+                first_timestamp = timestamp
+
+            text = extract_text(msg.get("content", ""))
+            if not text:
+                continue
+            if text.startswith("[cron:"):
+                continue
+
+            messages.append({
+                "role": role,
+                "timestamp": timestamp,
+                "text": text,
+            })
+
+    if not messages:
+        return None
+
+    frontmatter = [
+        "---",
+        "source: openclaw",
+        f"session: {session_id}",
+    ]
+    if first_timestamp:
+        frontmatter.append(f"date: {first_timestamp}")
+    frontmatter.append("participants: [user, assistant]")
+    frontmatter.append("---")
+    frontmatter.append("")
+
+    body = []
+    for msg in messages:
+        ts = msg["timestamp"]
+        body.append(f"[{ts}] {msg['role']}:")
+        body.append(msg["text"])
+        body.append("")
+
+    out_path = output_dir / f"{session_id}.md"
+    out_path.write_text("\n".join(frontmatter + body), encoding="utf-8")
+    return out_path
+
+
+def main():
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <input> <output-dir>", file=sys.stderr)
+        sys.exit(1)
+
+    input_path = Path(sys.argv[1])
+    output_dir = Path(sys.argv[2])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if input_path.is_file():
+        files = [input_path]
+    elif input_path.is_dir():
+        files = sorted(input_path.rglob("*.jsonl"))
+    else:
+        print(f"Error: {input_path} is not a file or directory", file=sys.stderr)
+        sys.exit(1)
+
+    converted = 0
+    for f in files:
+        result = convert_file(f, output_dir)
+        if result:
+            converted += 1
+            print(f"  {f.name} -> {result.name}")
+
+    print(f"Converted {converted}/{len(files)} files to {output_dir}")
+
+
+if __name__ == "__main__":
+    main()

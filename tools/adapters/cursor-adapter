@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Convert Cursor agent transcript JSONL to Imprint annotated markdown (D25).
+
+Usage:
+    cursor-adapter <input> <output-dir>
+
+    <input>     Path to a .jsonl file or a directory of .jsonl files
+                (e.g. ~/.cursor/projects/<id>/agent-transcripts/<uuid>/<uuid>.jsonl)
+    <output-dir> Directory where .md files are written
+
+Cursor JSONL schema (per line):
+    {"role": "user"|"assistant", "message": {"content": [{"type": "text", "text": "..."}]}}
+
+No timestamps in Cursor transcripts. Tool calls are not present in the JSONL.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def convert_file(jsonl_path: Path, output_dir: Path) -> Path:
+    session_id = jsonl_path.stem
+    messages = []
+
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            role = obj.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            content_blocks = obj.get("message", {}).get("content", [])
+            texts = []
+            for block in content_blocks:
+                if block.get("type") == "text":
+                    text = block.get("text", "").strip()
+                    if text:
+                        texts.append(text)
+            if texts:
+                messages.append({"role": role, "text": "\n".join(texts)})
+
+    if not messages:
+        return None
+
+    lines = [
+        "---",
+        "source: cursor",
+        f"session: {session_id}",
+        "participants: [user, assistant]",
+        "---",
+        "",
+    ]
+    for msg in messages:
+        lines.append(f"[] {msg['role']}:")
+        lines.append(msg["text"])
+        lines.append("")
+
+    out_path = output_dir / f"{session_id}.md"
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    return out_path
+
+
+def main():
+    if len(sys.argv) != 3:
+        print(f"Usage: {sys.argv[0]} <input> <output-dir>", file=sys.stderr)
+        sys.exit(1)
+
+    input_path = Path(sys.argv[1])
+    output_dir = Path(sys.argv[2])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if input_path.is_file():
+        files = [input_path]
+    elif input_path.is_dir():
+        files = sorted(input_path.rglob("*.jsonl"))
+    else:
+        print(f"Error: {input_path} is not a file or directory", file=sys.stderr)
+        sys.exit(1)
+
+    converted = 0
+    for f in files:
+        result = convert_file(f, output_dir)
+        if result:
+            converted += 1
+            print(f"  {f.name} -> {result.name}")
+
+    print(f"Converted {converted}/{len(files)} files to {output_dir}")
+
+
+if __name__ == "__main__":
+    main()

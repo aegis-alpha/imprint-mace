@@ -1,0 +1,315 @@
+# OpenClaw-Memory configuration
+# Copy to config.toml and fill in your values.
+
+[db]
+path = "memory.db"
+
+[consolidation]
+interval_minutes = 60
+min_facts = 10
+max_group_size = 20
+dedup_similarity_threshold = 0.9
+
+[embedding]
+dimensions = 1536          # 1536 for OpenAI text-embedding-3-small, 768 for nomic-embed-text
+distance_metric = "cosine" # cosine (default) or L2
+
+# --- Embedding providers ---
+# Same format as extraction providers. Used for generating fact embeddings.
+
+[[providers.embedding]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 15
+priority = 1
+
+[[providers.embedding]]
+name = "ollama"
+base_url = "http://localhost:11434"
+model = "nomic-embed-text"
+api_key_env = ""
+timeout_seconds = 30
+priority = 2
+
+[api]
+host = "127.0.0.1"
+port = 8080
+
+[watcher]
+path = "/data/transcripts"
+poll_interval_seconds = 30
+debounce_seconds = 2
+consolidate_after_ingest = true
+
+[prompts]
+extraction = "prompts/extraction-prompt.md"
+consolidation = "prompts/consolidation-prompt.md"
+query = "prompts/query-prompt.md"
+
+# Provider chains: ordered by priority (first = tried first).
+# api_key_env is the name of the environment variable holding the key.
+#
+# Provider types (determined by "name" field):
+#   "anthropic" -> Anthropic Messages API (/v1/messages)
+#   "ollama"    -> Ollama native API (/api/chat), no API key needed
+#   anything else -> OpenAI-compatible (/v1/chat/completions)
+#     Covers: OpenAI, Google Gemini, Groq, Together, Fireworks,
+#             DeepInfra, vLLM, llama.cpp, LM Studio
+#
+# Authentication:
+#   api_key_env = env var with API key (x-api-key for Anthropic, Bearer for others)
+#   token_env   = env var with OAuth/Bearer token (takes priority over api_key_env)
+#   Both are optional. token_env is tried first; if empty, falls back to api_key_env.
+
+# --- Extraction providers ---
+
+[[providers.extraction]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 120   # increase for slow models or long texts
+# temperature = 0.1     # optional; omit to use model default
+priority = 1
+
+[[providers.extraction]]
+name = "anthropic"
+base_url = "https://api.anthropic.com"
+model = "claude-haiku-4"
+api_key_env = "ANTHROPIC_API_KEY"   # standard API key
+token_env = "ANTHROPIC_TOKEN"       # or OAuth token (Pro/Max subscription)
+timeout_seconds = 120   # increase for slow models or long texts
+# temperature = 0.1     # optional; omit to use model default
+priority = 2
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-5-nano"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 120   # increase for slow models or long texts
+# temperature = 0.1     # optional; omit to use model default
+priority = 3
+
+[[providers.extraction]]
+name = "ollama"
+base_url = "http://localhost:11434"
+model = "qwen3.5:27b"
+api_key_env = ""
+timeout_seconds = 120
+priority = 4
+
+# --- Consolidation providers ---
+
+[[providers.consolidation]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 60
+priority = 1
+
+# --- Query providers ---
+
+[[providers.query]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 30
+priority = 1
+
+# Type taxonomy: the runtime source of truth for extraction prompts (D18).
+# These are rendered into the extraction prompt template at startup.
+# To evolve the taxonomy, edit these definitions -- the prompt updates automatically.
+# If omitted or empty, built-in defaults (same values) are used.
+
+# --- Fact types ---
+
+[[types.fact_types]]
+name = "preference"
+description = "Personal taste, style choice, tool preference"
+example = "Alice prefers dark mode in all editors"
+
+[[types.fact_types]]
+name = "decision"
+description = "A choice was made, a direction was chosen"
+example = "Decided to use Go instead of Rust"
+
+[[types.fact_types]]
+name = "rule"
+description = "Standing instruction, constraint, policy"
+example = "Never deploy on Fridays"
+
+[[types.fact_types]]
+name = "project"
+description = "Information about a project, its state, config"
+example = "Acme uses SQLite for storage"
+
+[[types.fact_types]]
+name = "contact"
+description = "A person's role, title, team, relation to others"
+example = "Bob leads the API team"
+
+[[types.fact_types]]
+name = "bio"
+description = "Biographical or personal information"
+example = "Alice is an engineer based in Berlin"
+
+[[types.fact_types]]
+name = "context"
+description = "Situational or temporal state (may expire)"
+example = "node-2 is offline since 04:00 UTC"
+
+[[types.fact_types]]
+name = "lesson"
+description = "Something learned from experience or failure"
+example = "Local models hallucinate on consolidation tasks"
+
+[[types.fact_types]]
+name = "workflow"
+description = "Multi-step procedure or process"
+example = "To deploy: push, wait for CI, run migrate, restart"
+
+[[types.fact_types]]
+name = "goal"
+description = "A desired outcome or objective"
+example = "Ship the MVP by end of Q2"
+
+[[types.fact_types]]
+name = "event"
+description = "A time-bound occurrence"
+example = "node-2 outage on 2026-03-14 at 04:00 UTC"
+
+[[types.fact_types]]
+name = "skill"
+description = "A capability or competency of an entity"
+example = "Alice knows Rust, Go, and SQL"
+
+# --- Entity types ---
+
+[[types.entity_types]]
+name = "person"
+description = "A human"
+example = "Alice, Bob"
+
+[[types.entity_types]]
+name = "project"
+description = "A software project or initiative"
+example = "Acme, DataSync"
+
+[[types.entity_types]]
+name = "tool"
+description = "A software tool, library, or service"
+example = "Postgres, Ollama, Ghost"
+
+[[types.entity_types]]
+name = "server"
+description = "A machine, VM, or infrastructure component"
+example = "mars, node-1"
+
+[[types.entity_types]]
+name = "concept"
+description = "An abstract idea, pattern, or technique"
+example = "consolidation, heartbeat loop"
+
+[[types.entity_types]]
+name = "organization"
+description = "A company, team, or group"
+example = "Acme Corp, DevOps team"
+
+[[types.entity_types]]
+name = "location"
+description = "A physical or logical place"
+example = "Berlin, us-east-1"
+
+[[types.entity_types]]
+name = "document"
+description = "A specific file, document, or artifact"
+example = "README.md, config.toml"
+
+[[types.entity_types]]
+name = "agent"
+description = "An AI agent or model (has agency, not just a tool)"
+example = "assistant, local-llm"
+
+# --- Relationship types ---
+
+[[types.relation_types]]
+name = "owns"
+description = "Ownership or possession"
+example = "Alice -> mars"
+
+[[types.relation_types]]
+name = "uses"
+description = "Active usage of a tool or resource"
+example = "assistant -> local-llm"
+
+[[types.relation_types]]
+name = "works_on"
+description = "Active involvement in a project"
+example = "Alice -> Acme"
+
+[[types.relation_types]]
+name = "depends_on"
+description = "Technical or operational dependency"
+example = "node-2 -> node-1"
+
+[[types.relation_types]]
+name = "related_to"
+description = "Generic association (use sparingly)"
+example = "Ghost -> Lexical"
+
+[[types.relation_types]]
+name = "created_by"
+description = "Authorship or creation"
+example = "README.md -> Alice"
+
+[[types.relation_types]]
+name = "part_of"
+description = "Composition or membership"
+example = "node-1 -> Acme cluster"
+
+[[types.relation_types]]
+name = "manages"
+description = "Administration or oversight"
+example = "Alice -> production servers"
+
+[[types.relation_types]]
+name = "located_at"
+description = "Physical or logical location"
+example = "mars -> Berlin office"
+
+# --- Connection types (between facts, used during consolidation) ---
+
+[[types.connection_types]]
+name = "supports"
+description = "Fact A reinforces fact B"
+example = ""
+
+[[types.connection_types]]
+name = "contradicts"
+description = "Fact A conflicts with fact B"
+example = ""
+
+[[types.connection_types]]
+name = "elaborates"
+description = "Fact A adds detail to fact B"
+example = ""
+
+[[types.connection_types]]
+name = "caused_by"
+description = "Fact A was caused by fact B"
+example = ""
+
+[[types.connection_types]]
+name = "supersedes"
+description = "Fact B replaces fact A"
+example = ""
+
+[[types.connection_types]]
+name = "precedes"
+description = "Fact A happened before fact B"
+example = ""
