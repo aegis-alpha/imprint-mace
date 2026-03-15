@@ -160,8 +160,13 @@ func openStore(logger *slog.Logger, cfg *config.Config) *db.SQLiteStore {
 		logger.Error("failed to open database", "path", cfg.DB.Path, "error", err)
 		os.Exit(1)
 	}
-	if err := store.EnsureVecTable(context.Background(), cfg.EffectiveEmbeddingDims()); err != nil {
+	dims := cfg.EffectiveEmbeddingDims()
+	if err := store.EnsureVecTable(context.Background(), dims); err != nil {
 		logger.Error("failed to initialize vector table", "error", err)
+		os.Exit(1)
+	}
+	if err := store.EnsureChunkVecTable(context.Background(), dims); err != nil {
+		logger.Error("failed to initialize chunk vector table", "error", err)
 		os.Exit(1)
 	}
 	return store
