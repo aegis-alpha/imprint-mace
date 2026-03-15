@@ -226,6 +226,30 @@ Add to `.claude/settings.json`:
 }
 ```
 
+### OpenClaw
+
+OpenClaw integrates via hooks -- deterministic, fires on every message without relying on the model to call tools.
+
+**Install hooks:**
+
+```bash
+cp -r tools/hooks/openclaw/imprint-ingest ~/.openclaw/hooks/
+cp -r tools/hooks/openclaw/imprint-query ~/.openclaw/hooks/
+```
+
+**Configure:**
+
+```bash
+export IMPRINT_URL="http://your-imprint-server:8080"
+```
+
+**What the hooks do:**
+
+- `imprint-ingest` -- sends every message to `POST /ingest` for knowledge extraction (fire-and-forget)
+- `imprint-query` -- calls `GET /query` with the message content and injects the answer as context for the agent (5s timeout)
+
+Both hooks listen for `message:preprocessed` events and use `bodyForAgent` (enriched body after media/link understanding), falling back to `body`.
+
 ## Data Model
 
 Imprint extracts three core structures from conversations:
@@ -347,6 +371,7 @@ The entire cycle is autonomous. No human intervention needed, though all proposa
 - MCP server (stdio transport, 7 tools) for Cursor, Claude Code, and other MCP-compatible agents
 - HTTP API: 8 REST endpoints (POST /ingest, GET /query, GET /status, GET /entities, GET /facts, GET /graph/{id}, PATCH /facts/{id}, POST /facts/{id}/supersede)
 - Platform adapters: Cursor, Claude Code, OpenClaw (Python scripts in tools/adapters/)
+- OpenClaw hooks: deterministic integration via message:preprocessed hooks (imprint-ingest for realtime knowledge extraction, imprint-query for automatic context retrieval)
 - Self-editing memory: agents can update fact metadata or supersede facts with corrected content
 - Semantic dedup during ingest: cosine similarity check skips near-duplicate facts (configurable threshold)
 - Context TTL: context-type facts auto-expire after configurable days

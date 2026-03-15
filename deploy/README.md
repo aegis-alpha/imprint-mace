@@ -61,3 +61,15 @@ Replace `:main` with a specific tag in `docker-compose.yml`:
 ```
 image: ghcr.io/aegis-alpha/imprint-mace:v1.0.0
 ```
+
+## OpenClaw Integration
+
+When running Imprint in Docker alongside OpenClaw, set `IMPRINT_URL` to the Docker service name:
+
+```bash
+export IMPRINT_URL="http://imprint:8080"
+```
+
+Both services must be on the same Docker network. If using separate compose files, create a shared network.
+
+The `imprint-ingest` hook fires on every message -- expect LLM extraction calls proportional to message volume. For high-traffic channels, consider increasing `timeout_seconds` on extraction providers and monitoring `imprint status` for queue depth.

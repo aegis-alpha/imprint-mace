@@ -31,6 +31,8 @@ Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). N
 
 **Performance note:** Each `Engine.Ingest()` call triggers one LLM extraction (2-10 seconds depending on text length and provider). For bulk operations, callers should process items sequentially with retry and backoff, not in parallel. Concurrent LLM calls risk rate limits and timeouts.
 
+**OpenClaw integration:** The `imprint-ingest` hook listens for `message:preprocessed` events and sends the enriched message body to `POST /ingest` automatically. This is a deterministic integration path -- every message is ingested without model intervention. The `imprint-query` hook calls `GET /query` on the same event and injects the answer as agent context.
+
 ### 1.3 Engine.Ingest()
 
 `internal/imprint.Engine` is the single canonical path for all ingestion.
