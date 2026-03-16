@@ -59,7 +59,7 @@ func testServer(t *testing.T, sender *mockSender) *Server {
 	}
 
 	eng := imprint.New(ext, store, nil, 0, 0, slog.Default())
-	return New(eng, store, nil, slog.Default())
+	return New(eng, store, nil, "test", slog.Default())
 }
 
 func testStore(t *testing.T) (*Server, db.Store) {
@@ -73,7 +73,7 @@ func testStore(t *testing.T) (*Server, db.Store) {
 	}
 	t.Cleanup(func() { store.Close() })
 
-	srv := New(nil, store, nil, slog.Default())
+	srv := New(nil, store, nil, "test", slog.Default())
 	return srv, store
 }
 
@@ -391,7 +391,7 @@ func TestQueryTool_ReturnsAnswer(t *testing.T) {
 	}}
 
 	q := query.New(store, nil, querySender, "", slog.Default())
-	srv := New(nil, store, q, slog.Default())
+	srv := New(nil, store, q, "test", slog.Default())
 
 	req := callTool(t, "imprint_query", map[string]any{
 		"question": "What language does Acme use?",
@@ -502,7 +502,7 @@ func TestSupersedeFactTool_OldFactNotFound(t *testing.T) {
 }
 
 func TestQueryTool_MissingQuestion(t *testing.T) {
-	srv := New(nil, nil, nil, slog.Default())
+	srv := New(nil, nil, nil, "test", slog.Default())
 
 	req := callTool(t, "imprint_query", map[string]any{})
 	result, err := srv.handleQuery(context.Background(), req)

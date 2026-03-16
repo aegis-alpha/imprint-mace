@@ -30,7 +30,14 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/watcher"
 )
 
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "version") {
+		fmt.Printf("imprint %s\n", version)
+		os.Exit(0)
+	}
+
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfgPath := flag.String("config", "", "path to config.toml (default: config.toml, env: IMPRINT_CONFIG)")
@@ -59,6 +66,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  mcp                       Start MCP server (stdio transport)")
 		fmt.Fprintln(os.Stderr, "  export [--format=json|csv] [--output=path] Export knowledge base")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
+		fmt.Fprintln(os.Stderr, "  version                   Print version and exit")
 		os.Exit(1)
 	}
 
@@ -606,7 +614,7 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		addr = fmt.Sprintf("%s:%d", host, port)
 	}
 
-	handler := api.NewHandler(eng, store, q, logger)
+	handler := api.NewHandler(eng, store, q, version, logger)
 
 	logger.Info("starting HTTP API server", "addr", addr)
 	if err := http.ListenAndServe(addr, handler); err != nil {
@@ -623,7 +631,7 @@ func runMCP(logger *slog.Logger, cfgPath string) {
 	eng := createEngine(logger, cfg, store)
 	q := createQuerier(logger, cfg, store)
 
-	srv := impmcp.New(eng, store, q, logger)
+	srv := impmcp.New(eng, store, q, version, logger)
 	if err := srv.Run(context.Background()); err != nil {
 		logger.Error("mcp server failed", "error", err)
 		os.Exit(1)

@@ -28,15 +28,17 @@ type Handler struct {
 	store   db.Store
 	querier *query.Querier
 	logger  *slog.Logger
+	version string
 	mux     *http.ServeMux
 }
 
-func NewHandler(engine *imprint.Engine, store db.Store, querier *query.Querier, logger *slog.Logger) *Handler {
+func NewHandler(engine *imprint.Engine, store db.Store, querier *query.Querier, version string, logger *slog.Logger) *Handler {
 	h := &Handler{
 		engine:  engine,
 		store:   store,
 		querier: querier,
 		logger:  logger,
+		version: version,
 		mux:     http.NewServeMux(),
 	}
 	h.mux.HandleFunc("/status", h.methodGET(h.handleStatus))
@@ -73,6 +75,11 @@ func (h *Handler) methodPOST(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+type statusResponse struct {
+	Version string    `json:"version"`
+	Stats   *db.DBStats `json:"stats"`
+}
+
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.store.Stats(r.Context())
 	if err != nil {
@@ -80,7 +87,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "stats failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, stats)
+	writeJSON(w, http.StatusOK, statusResponse{Version: h.version, Stats: stats})
 }
 
 func (h *Handler) handleEntities(w http.ResponseWriter, r *http.Request) {

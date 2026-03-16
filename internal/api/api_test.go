@@ -43,7 +43,7 @@ func testAPI(t *testing.T) (*Handler, db.Store) {
 		ProviderName: "mock", Model: "test", TokensUsed: 10,
 	}}
 	q := query.New(store, nil, sender, "", slog.Default())
-	h := NewHandler(nil, store, q, slog.Default())
+	h := NewHandler(nil, store, q, "test", slog.Default())
 	return h, store
 }
 

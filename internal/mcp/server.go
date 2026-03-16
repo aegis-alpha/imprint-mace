@@ -24,7 +24,7 @@ type Server struct {
 	mcp     *server.MCPServer
 }
 
-func New(engine *imprint.Engine, store db.Store, querier *query.Querier, logger *slog.Logger) *Server {
+func New(engine *imprint.Engine, store db.Store, querier *query.Querier, version string, logger *slog.Logger) *Server {
 	s := &Server{
 		engine:  engine,
 		store:   store,
@@ -34,7 +34,7 @@ func New(engine *imprint.Engine, store db.Store, querier *query.Querier, logger 
 
 	s.mcp = server.NewMCPServer(
 		"imprint",
-		"0.1.0",
+		version,
 		server.WithToolCapabilities(false),
 	)
 

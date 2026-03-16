@@ -1,3 +1,4 @@
+[![Release](https://img.shields.io/github/v/release/aegis-alpha/imprint-MACE)](https://github.com/aegis-alpha/imprint-MACE/releases)
 [![Agent](https://img.shields.io/badge/Agent-Claude_Code-blue)]()
 [![Agent](https://img.shields.io/badge/Agent-OpenClaw-orange)]()
 [![Agent](https://img.shields.io/badge/Agent-Cursor-black)]()
