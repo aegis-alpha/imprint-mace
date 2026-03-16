@@ -1,11 +1,11 @@
-[![Release](https://img.shields.io/github/v/release/aegis-alpha/imprint-MACE)](https://github.com/aegis-alpha/imprint-MACE/releases)
+[![Release](https://img.shields.io/github/v/release/aegis-alpha/imprint-mace)](https://github.com/aegis-alpha/imprint-MACE/releases)
 [![Agent](https://img.shields.io/badge/Agent-Claude_Code-blue)]()
 [![Agent](https://img.shields.io/badge/Agent-OpenClaw-orange)]()
 [![Agent](https://img.shields.io/badge/Agent-Cursor-black)]()
 [![Agent](https://img.shields.io/badge/Agent-Craft_Agents-grey)]()
 [![Channel](https://img.shields.io/badge/MCP-red)]()
 [![Channel](https://img.shields.io/badge/API-blue)]()
-[![License](https://img.shields.io/badge/Open_Source-MIT-green)]()
+[![License](https://img.shields.io/badge/Open_Source-MIT-green)](https://github.com/aegis-alpha/imprint-mace/blob/main/LICENSE)
 
 
 
@@ -135,6 +135,8 @@ echo "Alice decided to use Go for Acme." | ./imprint ingest
 ./imprint query "What language is Acme written in?"
 
 # Start HTTP API server (default 127.0.0.1:8080)
+# If the port is busy, tries the next available (up to +20)
+# Writes actual address to ~/.imprint/serve.json for auto-discovery
 ./imprint serve
 
 # Start MCP server (stdio transport, for Cursor/Claude Code)
@@ -240,8 +242,17 @@ cp -r tools/hooks/openclaw/imprint-query ~/.openclaw/hooks/
 
 **Configure:**
 
-```bash
-export IMPRINT_URL="http://your-imprint-server:8080"
+If `imprint serve` is running locally, hooks discover the server automatically via `~/.imprint/serve.json` -- no configuration needed.
+
+To override (e.g. remote server), set `IMPRINT_URL` in the hook's env config:
+
+```json
+{
+  "entries": {
+    "imprint-ingest": { "enabled": true, "env": { "IMPRINT_URL": "http://your-server:8080" } },
+    "imprint-query": { "enabled": true, "env": { "IMPRINT_URL": "http://your-server:8080" } }
+  }
+}
 ```
 
 **What the hooks do:**
