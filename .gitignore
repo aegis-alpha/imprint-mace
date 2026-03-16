@@ -38,6 +38,9 @@ research/benchmarks/results-bob/
 research/benchmarks/test-data.json
 research/benchmarks/test-data-large.json
 
+# Zig (cross-compilation cache)
+.zig-cache/
+
 # OS
 .DS_Store
 Thumbs.db
