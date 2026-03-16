@@ -149,6 +149,8 @@ func main() {
 		runExport(logger, *cfgPath, format, output)
 	case "gc":
 		runGC(logger, *cfgPath)
+	case "version":
+		fmt.Printf("imprint %s\n", version)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		os.Exit(1)
