@@ -18,9 +18,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.13.0
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: '~> v2'
