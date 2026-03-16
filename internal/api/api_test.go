@@ -64,12 +64,15 @@ func TestStatus_ReturnsStats(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var stats db.DBStats
-	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+	var resp statusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("parse JSON: %v", err)
 	}
-	if stats.Entities != 1 {
-		t.Errorf("expected 1 entity, got %d", stats.Entities)
+	if resp.Stats.Entities != 1 {
+		t.Errorf("expected 1 entity, got %d", resp.Stats.Entities)
+	}
+	if resp.Version != "test" {
+		t.Errorf("expected version %q, got %q", "test", resp.Version)
 	}
 }
 
