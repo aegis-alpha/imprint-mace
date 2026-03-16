@@ -33,6 +33,8 @@ Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). N
 
 **OpenClaw integration:** The `imprint-ingest` hook listens for `message:preprocessed` events and sends the enriched message body to `POST /ingest` automatically. This is a deterministic integration path -- every message is ingested without model intervention. The `imprint-query` hook calls `GET /query` on the same event and injects the answer as agent context.
 
+**Service discovery:** The server writes its actual listen address to `~/.imprint/serve.json` on startup. If the configured port is busy, it tries the next available port (up to +20). Hooks and other clients read this file to discover the server automatically. The file is removed on graceful shutdown.
+
 ### 1.3 Engine.Ingest()
 
 `internal/imprint.Engine` is the single canonical path for all ingestion.

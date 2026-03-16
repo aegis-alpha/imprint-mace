@@ -73,3 +73,5 @@ export IMPRINT_URL="http://imprint:8080"
 Both services must be on the same Docker network. If using separate compose files, create a shared network.
 
 The `imprint-ingest` hook fires on every message -- expect LLM extraction calls proportional to message volume. For high-traffic channels, consider increasing `timeout_seconds` on extraction providers and monitoring `imprint status` for queue depth.
+
+In Docker, port conflicts don't apply (isolated network namespace), so auto-port fallback is not needed. The `IMPRINT_URL` env variable takes priority over `~/.imprint/serve.json` -- use it for Docker deployments.

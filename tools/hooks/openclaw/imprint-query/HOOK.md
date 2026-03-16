@@ -21,7 +21,14 @@ continues silently -- message processing is not blocked.
 
 ## Configuration
 
-- `IMPRINT_URL` environment variable (default: `http://localhost:8080`)
+URL resolution priority:
+
+1. `IMPRINT_URL` environment variable (set in hook env config)
+2. `~/.imprint/serve.json` (written automatically by `imprint serve`)
+3. Default: `http://localhost:8080`
+
+On first message, the hook checks `GET /status` to verify Imprint is reachable.
+If not -- the hook disables itself and logs a warning.
 
 ## Minimum content length
 

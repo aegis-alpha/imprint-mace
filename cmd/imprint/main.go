@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -618,9 +620,29 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 
 	handler := api.NewHandler(eng, store, q, version, logger)
 
-	logger.Info("starting HTTP API server", "addr", addr)
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	ln, actualAddr, err := listenWithFallback(addr, 20, logger)
+	if err != nil {
+		logger.Error("no available port found", "base_addr", addr, "error", err)
+		os.Exit(1)
+	}
+	if err := writeServeInfo(actualAddr); err != nil {
+		logger.Warn("failed to write serve info", "error", err)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		logger.Info("shutting down HTTP API server")
+		removeServeInfo()
+		ln.Close()
+		os.Exit(0)
+	}()
+
+	logger.Info("starting HTTP API server", "addr", actualAddr)
+	if err := http.Serve(ln, handler); err != nil {
 		logger.Error("server failed", "error", err)
+		removeServeInfo()
 		os.Exit(1)
 	}
 }
@@ -812,6 +834,44 @@ func csvEscape(s string) string {
 		return "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
 	}
 	return s
+}
+
+func listenWithFallback(baseAddr string, maxAttempts int, logger *slog.Logger) (net.Listener, string, error) {
+	host, portStr, err := net.SplitHostPort(baseAddr)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid address %q: %w", baseAddr, err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	for i := 0; i < maxAttempts; i++ {
+		addr := fmt.Sprintf("%s:%d", host, port+i)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			if i > 0 {
+				logger.Warn("configured port busy, using fallback",
+					"configured", baseAddr, "actual", addr)
+			}
+			return ln, addr, nil
+		}
+	}
+	return nil, "", fmt.Errorf("ports %d-%d all busy", port, port+maxAttempts-1)
+}
+
+func serveInfoPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".imprint", "serve.json")
+}
+
+func writeServeInfo(addr string) error {
+	dir := filepath.Dir(serveInfoPath())
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	info := map[string]string{"url": "http://" + addr}
+	data, _ := json.Marshal(info)
+	return os.WriteFile(serveInfoPath(), data, 0644)
+}
+
+func removeServeInfo() {
+	os.Remove(serveInfoPath())
 }
 
 func runGC(logger *slog.Logger, cfgPath string) {

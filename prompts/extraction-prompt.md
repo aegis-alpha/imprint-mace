@@ -77,6 +77,8 @@ If none fit, use a short lowercase custom string (e.g. "communicates_with").
 | 0.3 - 0.49 | Weak signal, speculative |
 | Below 0.3 | Do not extract -- too uncertain |
 
+Calibration: most facts should fall in the 0.5-0.85 range. A confidence of 0.9+ means the fact is explicitly and unambiguously stated -- this is the exception, not the norm. If you find yourself assigning 0.85+ to every fact, you are over-confident. Inferred facts, implied preferences, and secondhand information should be 0.5-0.7.
+
 ## Rules
 
 1. Extract only facts with lasting value. Skip greetings, filler, debugging chatter, and transient coordination ("ok", "let me check", "one moment").
@@ -247,4 +249,44 @@ Alice: That's the third time this week. Lesson learned -- we need to cap concurr
     {"from_entity": "node-1", "to_entity": "Acme", "relation_type": "part_of"}
   ]
 }
+```
+
+### Example 4: Weak signal, single fact
+
+**Input:**
+```
+Alice: I think Bob mentioned something about switching to Kubernetes, but I'm not sure if that was decided or just an idea he had.
+```
+
+**Output:**
+```json
+{
+  "facts": [
+    {
+      "fact_type": "project",
+      "subject": "Kubernetes",
+      "content": "Bob may be considering a switch to Kubernetes, but no decision has been made.",
+      "confidence": 0.4,
+      "validity": {"valid_from": null, "valid_until": null}
+    }
+  ],
+  "entities": [
+    {"name": "Bob", "entity_type": "person", "aliases": []}
+  ],
+  "relationships": []
+}
+```
+
+### Example 5: No extractable knowledge
+
+**Input:**
+```
+Alice: ok sounds good, let me check
+Assistant: Sure, take your time.
+Alice: alright, back. Where were we?
+```
+
+**Output:**
+```json
+{"facts": [], "entities": [], "relationships": []}
 ```
