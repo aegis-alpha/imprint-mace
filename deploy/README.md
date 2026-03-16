@@ -74,4 +74,13 @@ Both services must be on the same Docker network. If using separate compose file
 
 The `imprint-ingest` hook fires on every message -- expect LLM extraction calls proportional to message volume. For high-traffic channels, consider increasing `timeout_seconds` on extraction providers and monitoring `imprint status` for queue depth.
 
-In Docker, port conflicts don't apply (isolated network namespace), so auto-port fallback is not needed. The `IMPRINT_URL` env variable takes priority over `~/.imprint/serve.json` -- use it for Docker deployments.
+The docker-compose mounts `~/.imprint` from the host so that `serve.json` (written by Imprint on startup) is visible to hooks running outside the container.
+
+`IMPRINT_ADVERTISE_URL` controls what URL is written to `serve.json`. Set it to the host-side address (matching the `ports:` mapping). If you change the port mapping, update both:
+
+```yaml
+ports:
+  - "127.0.0.1:8890:8080"
+environment:
+  - IMPRINT_ADVERTISE_URL=http://127.0.0.1:8890
+```

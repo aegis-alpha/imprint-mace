@@ -1473,6 +1473,21 @@ func (s *SQLiteStore) reconstructPath(ctx context.Context, fromID, toID string, 
 	return steps, nil
 }
 
+func (s *SQLiteStore) SupersedeRealtimeBySession(ctx context.Context, sessionID string) (int64, error) {
+	prefix := "realtime:" + sessionID
+	// Temporarily disable FK checks so we can use a sentinel value
+	// ('batch-replaced') that is not a real fact ID.
+	s.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF")
+	res, err := s.db.ExecContext(ctx,
+		"UPDATE facts SET superseded_by = 'batch-replaced' WHERE source_file = ? AND (superseded_by IS NULL OR superseded_by = '')",
+		prefix)
+	s.db.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+	if err != nil {
+		return 0, fmt.Errorf("supersede realtime facts for session %s: %w", sessionID, err)
+	}
+	return res.RowsAffected()
+}
+
 func (s *SQLiteStore) DeleteExpiredFacts(ctx context.Context, olderThan time.Time) (int64, error) {
 	cutoff := olderThan.UTC().Format(time.RFC3339)
 	res, err := s.db.ExecContext(ctx,

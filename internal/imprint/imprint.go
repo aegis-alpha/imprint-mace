@@ -55,6 +55,7 @@ type IngestOption func(*ingestOpts)
 type ingestOpts struct {
 	lineStart int
 	lineEnd   int
+	sessionID string
 }
 
 // WithLineOffset sets the source line range on all extracted facts.
@@ -64,6 +65,15 @@ func WithLineOffset(start, end int) IngestOption {
 	return func(o *ingestOpts) {
 		o.lineStart = start
 		o.lineEnd = end
+	}
+}
+
+// WithSessionID marks all extracted facts with a realtime session prefix.
+// Used by the realtime ingest path so batch ingest can later supersede
+// these facts by session boundary.
+func WithSessionID(id string) IngestOption {
+	return func(o *ingestOpts) {
+		o.sessionID = id
 	}
 }
 
@@ -85,6 +95,15 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 		lr := [2]int{o.lineStart, o.lineEnd}
 		for i := range extracted.Facts {
 			extracted.Facts[i].Source.LineRange = &lr
+		}
+	}
+
+	if o.sessionID != "" {
+		realtimeSource := "realtime:" + o.sessionID
+		for i := range extracted.Facts {
+			if extracted.Facts[i].Source.TranscriptFile == "" || extracted.Facts[i].Source.TranscriptFile == sourceFile {
+				extracted.Facts[i].Source.TranscriptFile = realtimeSource
+			}
 		}
 	}
 

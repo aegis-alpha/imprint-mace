@@ -202,6 +202,17 @@ func (b *BatchAdapter) processFile(ctx context.Context, dir, path string, result
 		return false, fmt.Errorf("record ingested file: %w", err)
 	}
 
+	if fm != nil && fm.Session != "" {
+		superseded, err := b.store.SupersedeRealtimeBySession(ctx, fm.Session)
+		if err != nil {
+			b.logger.Warn("failed to supersede realtime facts",
+				"session", fm.Session, "error", err)
+		} else if superseded > 0 {
+			b.logger.Info("superseded realtime facts for session",
+				"session", fm.Session, "count", superseded)
+		}
+	}
+
 	b.logger.Info("file ingested",
 		"path", relPath,
 		"chunks", len(chunks),

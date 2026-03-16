@@ -49,14 +49,11 @@ const handler = async (event: any) => {
   ).trim();
   if (content.length < MIN_LENGTH) return;
 
-  const parts = [
+  const sessionId = event.sessionKey || [
     event.context?.channelId,
     event.context?.conversationId,
-    event.timestamp instanceof Date
-      ? event.timestamp.toISOString().slice(0, 10)
-      : undefined,
-  ].filter(Boolean);
-  const source = parts.join("-");
+  ].filter(Boolean).join(":");
+  const source = `realtime:${sessionId}`;
 
   void (async () => {
     if (!(await ensureReachable(url))) return;

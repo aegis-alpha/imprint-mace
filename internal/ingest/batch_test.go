@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/config"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/extraction"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
+	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/transcript"
 )
@@ -478,6 +480,53 @@ func TestProcessDir_CreatesTranscriptChunks(t *testing.T) {
 	}
 	if chunks[0].ContentHash == "" {
 		t.Error("chunk content_hash is empty")
+	}
+}
+
+func TestProcessDir_SupersedesRealtimeFacts(t *testing.T) {
+	sender := &mockSender{response: &provider.Response{
+		Content: mockJSON, ProviderName: "mock", Model: "test", TokensUsed: 50,
+	}}
+	adapter, store, dir := testSetup(t, sender)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		store.CreateFact(ctx, &model.Fact{
+			ID: db.NewID(), Source: model.Source{TranscriptFile: "realtime:test-session"},
+			FactType: model.FactDecision, Content: fmt.Sprintf("realtime fact %d", i),
+			Confidence: 0.8, CreatedAt: time.Now().UTC(),
+		})
+	}
+
+	active, _ := store.ListFacts(ctx, db.FactFilter{NotSuperseded: true})
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active realtime facts before batch, got %d", len(active))
+	}
+
+	content := "---\nsource: openclaw\nsession: test-session\ndate: 2026-03-16\nparticipants: [user, assistant]\n---\n\nAlice decided to use Go for Acme.\n"
+	writeFile(t, dir, "transcript.md", content)
+
+	_, err := adapter.ProcessDir(ctx, dir)
+	if err != nil {
+		t.Fatalf("ProcessDir: %v", err)
+	}
+
+	all, _ := store.ListFacts(ctx, db.FactFilter{})
+	var supersededCount int
+	for _, f := range all {
+		if f.Source.TranscriptFile == "realtime:test-session" && f.SupersededBy == "batch-replaced" {
+			supersededCount++
+		}
+	}
+	if supersededCount != 3 {
+		t.Errorf("expected 3 superseded realtime facts, got %d", supersededCount)
+	}
+
+	active, _ = store.ListFacts(ctx, db.FactFilter{NotSuperseded: true})
+	for _, f := range active {
+		if f.Source.TranscriptFile == "realtime:test-session" {
+			t.Error("realtime fact should have been superseded after batch ingest")
+		}
 	}
 }
 

@@ -91,6 +91,9 @@ type Store interface {
 	ListFactsByEmbeddingModel(ctx context.Context, model string) ([]model.Fact, error)
 	ListFactsWithoutEmbedding(ctx context.Context) ([]model.Fact, error)
 
+	// Session-based supersede (dual-layer memory)
+	SupersedeRealtimeBySession(ctx context.Context, sessionID string) (int64, error)
+
 	// Retention / GC
 	DeleteExpiredFacts(ctx context.Context, olderThan time.Time) (int64, error)
 

@@ -313,6 +313,32 @@ func TestIngest_DedupDisabledWithoutEmbedder(t *testing.T) {
 	}
 }
 
+func TestIngest_WithSessionID(t *testing.T) {
+	sender := &mockSender{response: &provider.Response{
+		Content: mockJSON, ProviderName: "mock", Model: "test", TokensUsed: 100,
+	}}
+	eng, store := testEngine(t, sender)
+	ctx := context.Background()
+
+	result, err := eng.Ingest(ctx, "Alice decided Acme uses Go.", "test.md", WithSessionID("sess-abc"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.FactsCount != 2 {
+		t.Fatalf("expected 2 facts, got %d", result.FactsCount)
+	}
+
+	facts, err := store.ListFacts(ctx, db.FactFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	for i, f := range facts {
+		if f.Source.TranscriptFile != "realtime:sess-abc" {
+			t.Errorf("fact[%d]: source_file = %q, want %q", i, f.Source.TranscriptFile, "realtime:sess-abc")
+		}
+	}
+}
+
 func TestIngest_DedupThresholdZero_Disabled(t *testing.T) {
 	vec := []float32{0.1, 0.2, 0.3, 0.4}
 	embedder := &mockEmbedder{vec: vec}

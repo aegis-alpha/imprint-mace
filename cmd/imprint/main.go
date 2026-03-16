@@ -865,7 +865,11 @@ func writeServeInfo(addr string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	info := map[string]string{"url": "http://" + addr}
+	url := "http://" + addr
+	if advertise := os.Getenv("IMPRINT_ADVERTISE_URL"); advertise != "" {
+		url = advertise
+	}
+	info := map[string]string{"url": url}
 	data, _ := json.Marshal(info)
 	return os.WriteFile(serveInfoPath(), data, 0644)
 }

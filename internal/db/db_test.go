@@ -1462,6 +1462,57 @@ func TestSupersedeWithContent_CopiesTypeAndSubject(t *testing.T) {
 	}
 }
 
+// --- SupersedeRealtimeBySession ---
+
+func TestSupersedeRealtimeBySession(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	for i := 0; i < 3; i++ {
+		store.CreateFact(ctx, &model.Fact{
+			ID: NewID(), Source: model.Source{TranscriptFile: "realtime:sess-1"},
+			FactType: model.FactDecision, Content: "realtime fact " + string(rune('A'+i)),
+			Confidence: 0.8, CreatedAt: now,
+		})
+	}
+	store.CreateFact(ctx, &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "realtime:sess-2"},
+		FactType: model.FactDecision, Content: "different session fact",
+		Confidence: 0.8, CreatedAt: now,
+	})
+	store.CreateFact(ctx, &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "batch-file.md"},
+		FactType: model.FactDecision, Content: "batch fact",
+		Confidence: 0.8, CreatedAt: now,
+	})
+
+	superseded, err := store.SupersedeRealtimeBySession(ctx, "sess-1")
+	if err != nil {
+		t.Fatalf("SupersedeRealtimeBySession: %v", err)
+	}
+	if superseded != 3 {
+		t.Errorf("expected 3 superseded, got %d", superseded)
+	}
+
+	active, _ := store.ListFacts(ctx, FactFilter{NotSuperseded: true})
+	if len(active) != 2 {
+		t.Errorf("expected 2 active facts (sess-2 + batch), got %d", len(active))
+	}
+	for _, f := range active {
+		if f.Source.TranscriptFile == "realtime:sess-1" {
+			t.Error("sess-1 fact should have been superseded")
+		}
+	}
+
+	facts, _ := store.ListFacts(ctx, FactFilter{})
+	for _, f := range facts {
+		if f.Source.TranscriptFile == "realtime:sess-1" && f.SupersededBy != "batch-replaced" {
+			t.Errorf("fact %s: superseded_by = %q, want %q", f.ID, f.SupersededBy, "batch-replaced")
+		}
+	}
+}
+
 // --- Transcripts (D22) ---
 
 func TestCreateAndGetTranscript(t *testing.T) {

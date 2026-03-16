@@ -19,6 +19,7 @@ Tree structure (parentId) is ignored; messages are taken in file order (chronolo
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,7 +40,7 @@ def extract_text(content) -> str:
 
 
 def convert_file(jsonl_path: Path, output_dir: Path) -> Path:
-    session_id = jsonl_path.stem
+    session_key = os.environ.get("IMPRINT_SESSION_KEY", "") or jsonl_path.stem
     messages = []
     first_timestamp = None
 
@@ -80,7 +81,7 @@ def convert_file(jsonl_path: Path, output_dir: Path) -> Path:
     frontmatter = [
         "---",
         "source: openclaw",
-        f"session: {session_id}",
+        f"session: {session_key}",
     ]
     if first_timestamp:
         frontmatter.append(f"date: {first_timestamp}")
@@ -95,7 +96,7 @@ def convert_file(jsonl_path: Path, output_dir: Path) -> Path:
         body.append(msg["text"])
         body.append("")
 
-    out_path = output_dir / f"{session_id}.md"
+    out_path = output_dir / f"{jsonl_path.stem}.md"
     out_path.write_text("\n".join(frontmatter + body), encoding="utf-8")
     return out_path
 
