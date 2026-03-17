@@ -43,6 +43,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 
 	llmCfg := []model.ProviderConfig{{
 		Name:      "openai",
+		BaseURL:   "https://api.openai.com/v1",
 		Model:     "gpt-4.1-mini",
 		APIKeyEnv: "OPENAI_API_KEY",
 	}}
