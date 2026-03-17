@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/model"
@@ -71,6 +72,10 @@ func (p *OpenAICompatible) Send(ctx context.Context, req Request) (*Response, er
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if strings.Contains(p.config.BaseURL, "openrouter.ai") {
+		httpReq.Header.Set("HTTP-Referer", "https://github.com/aegis-alpha/imprint-MACE")
+		httpReq.Header.Set("X-Title", "Imprint MACE")
+	}
 
 	httpResp, err := p.client.Do(httpReq)
 	if err != nil {

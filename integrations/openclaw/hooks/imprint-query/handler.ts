@@ -3,9 +3,16 @@ import { join } from "path";
 import { homedir } from "os";
 
 const MIN_LENGTH = 20;
-const TIMEOUT_MS = 5000;
-let verified = false;
-let disabled = false;
+const RECHECK_INTERVAL_MS = 60_000;
+
+function getTimeoutMs(): number {
+  const env = process.env.IMPRINT_QUERY_TIMEOUT;
+  if (env) {
+    const parsed = parseInt(env, 10);
+    if (parsed > 0) return parsed;
+  }
+  return 5000;
+}
 
 function getImprintURL(): string {
   const envURL = process.env.IMPRINT_URL;
@@ -20,21 +27,25 @@ function getImprintURL(): string {
   return "http://localhost:8080";
 }
 
-async function ensureReachable(url: string): Promise<boolean> {
-  if (disabled) return false;
-  if (verified) return true;
+let reachable = false;
+let lastCheckAt = 0;
+
+async function checkReachable(url: string): Promise<boolean> {
+  const now = Date.now();
+  if (reachable) return true;
+  if (now - lastCheckAt < RECHECK_INTERVAL_MS) return false;
+  lastCheckAt = now;
   try {
     const res = await fetch(`${url}/status`, {
       signal: AbortSignal.timeout(3000),
     });
     if (res.ok) {
-      verified = true;
+      reachable = true;
       return true;
     }
   } catch {}
-  disabled = true;
   console.warn(
-    `[imprint-query] Imprint not reachable at ${url} -- hook disabled. ` +
+    `[imprint-query] Imprint not reachable at ${url} -- will retry in ${RECHECK_INTERVAL_MS / 1000}s. ` +
       `Set IMPRINT_URL env or check that imprint serve is running.`,
   );
   return false;
@@ -50,33 +61,34 @@ const handler = async (event: any) => {
   ).trim();
   if (content.length < MIN_LENGTH) return;
 
-  if (!(await ensureReachable(url))) return;
+  if (!(await checkReachable(url))) return;
+
+  const timeoutMs = getTimeoutMs();
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     const res = await fetch(
-      `${url}/query?q=${encodeURIComponent(content)}`,
+      `${url}/context?hint=${encodeURIComponent(content)}`,
       { signal: controller.signal },
     );
     clearTimeout(timer);
 
     if (!res.ok) {
-      console.warn(`[imprint-query] query returned ${res.status}`);
+      console.warn(`[imprint-query] /context returned ${res.status}`);
       return;
     }
 
-    const data = await res.json();
-    const answer = data?.answer;
-    if (answer && typeof answer === "string" && answer.trim().length > 0) {
-      event.messages.push(`[Imprint context] ${answer}`);
+    const text = await res.text();
+    if (text && text.trim().length > 0) {
+      event.messages.push(`[Imprint context]\n${text.trim()}`);
     }
   } catch (err: any) {
     if (err?.name === "AbortError") {
-      console.warn("[imprint-query] query timed out after 5s");
+      console.warn(`[imprint-query] /context timed out after ${timeoutMs}ms`);
     } else {
-      console.warn("[imprint-query] query failed:", err);
+      console.warn("[imprint-query] /context failed:", err);
     }
   }
 };

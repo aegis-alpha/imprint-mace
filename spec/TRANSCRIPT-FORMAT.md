@@ -54,7 +54,7 @@ One of: `cursor`, `claude-code`, `openclaw`, `craft-agents`. Lowercase, kebab-ca
 
 **session**
 
-The platform's native session identifier. For Cursor and Claude Code this is a UUID. For OpenClaw this is the session key. The value is opaque to Imprint -- stored but not interpreted.
+The platform's native session identifier. For Cursor and Claude Code this is a UUID. For OpenClaw this is the session key. Used by D27 dual-layer memory for session-boundary supersede: when batch ingest processes a transcript, all realtime facts with matching session ID are superseded by the richer batch facts. The value must match the session ID used by the platform's realtime ingest hook.
 
 **date**
 

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/config"
+	"github.com/aegis-alpha/imprint-mace/internal/update"
 	"github.com/aegis-alpha/imprint-mace/internal/consolidation"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/extraction"
@@ -39,6 +40,8 @@ func main() {
 		fmt.Printf("imprint %s\n", version)
 		os.Exit(0)
 	}
+
+	go update.Check(version)
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 

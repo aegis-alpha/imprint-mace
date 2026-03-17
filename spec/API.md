@@ -64,17 +64,20 @@ Ask a question against the knowledge base.
 
 ### GET /status
 
-Database statistics.
+Database statistics, wrapped with version info.
 
 **Response (200):**
 
 ```json
 {
-  "facts": 142,
-  "entities": 38,
-  "relationships": 67,
-  "consolidations": 5,
-  "ingested_files": 12
+  "version": "0.1.0",
+  "stats": {
+    "facts": 142,
+    "entities": 38,
+    "relationships": 67,
+    "consolidations": 5,
+    "ingested_files": 12
+  }
 }
 ```
 
@@ -216,7 +219,7 @@ Get the subgraph around an entity: connected entities and relationships up to a 
 
 ## 2. MCP Tools
 
-Start with `imprint mcp`. Runs over stdio (JSON-RPC). Compatible with Cursor, Claude Code, and other MCP clients.
+Start with `imprint mcp`. Runs over stdio (JSON-RPC). Compatible with Cursor, Claude Code, and other MCP clients. The MCP server advertises the binary version in its server info (`imprint`, version string).
 
 ### imprint_ingest
 
@@ -313,10 +316,15 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `status` | -- | Show database statistics |
 | `query` | `QUESTION` | Ask a question against the knowledge base |
 | `embed-backfill` | `[--model=X] [--chunks]` | Generate embeddings for facts (or chunks with `--chunks`) without them, or re-embed by model |
-| `serve` | `[--host=H] [--port=P]` | Start HTTP API server |
+| `serve` | `[--host=H] [--port=P] [--watch=PATH]` | Start HTTP API server. `--watch` starts a file watcher alongside the server. |
 | `mcp` | -- | Start MCP server (stdio transport) |
 | `export` | `[--format=json\|csv] [--output=path]` | Export entire knowledge base |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
+| `version` | -- | Print version and exit |
+
+The `--version` flag (before any command) also prints version and exits.
+
+**Service discovery:** The `serve` command writes its actual listen address to `~/.imprint/serve.json` on startup. If the configured port is busy, it tries the next available port (up to +20). Set `IMPRINT_ADVERTISE_URL` to override the URL written to `serve.json` (useful when behind a proxy or on a remote server).
 
 ### Examples
 
@@ -345,6 +353,9 @@ imprint embed-backfill --model=text-embedding-3-small
 # Start HTTP server on custom port
 imprint serve --port=9090
 
+# Start HTTP server with file watcher
+imprint serve --watch=/data/transcripts
+
 # Start MCP server
 imprint mcp
 
@@ -359,4 +370,8 @@ imprint embed-backfill --chunks
 
 # Delete expired facts
 imprint gc
+
+# Print version
+imprint version
+imprint --version
 ```

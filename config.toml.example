@@ -33,6 +33,24 @@ api_key_env = ""
 timeout_seconds = 30
 priority = 2
 
+# Voyage AI -- high-quality embeddings, 200M free tokens/year
+# OpenAI-compatible embedding API. Docs: https://docs.voyageai.com/docs/embeddings
+[[providers.embedding]]
+name = "voyage"
+base_url = "https://api.voyageai.com/v1"
+model = "voyage-4-lite"
+api_key_env = "VOYAGE_API_KEY"
+timeout_seconds = 15
+priority = 3
+
+[[providers.embedding]]
+name = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+model = "openai/text-embedding-3-small"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_seconds = 15
+priority = 4
+
 [api]
 host = "127.0.0.1"
 port = 8080
@@ -101,6 +119,18 @@ api_key_env = ""
 timeout_seconds = 120
 priority = 4
 
+# OpenRouter -- single API key, 300+ models, 29 free (20 req/min, 200 req/day)
+# Uses OpenAI-compatible API. Model format: provider/model-name
+# Free models: append :free (e.g. qwen/qwen3-next-80b:free)
+# Full model list: https://openrouter.ai/models
+[[providers.extraction]]
+name = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+model = "qwen/qwen3-next-80b:free"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_seconds = 120
+priority = 5
+
 # --- Consolidation providers ---
 
 [[providers.consolidation]]
@@ -120,6 +150,14 @@ model = "gemini-2.5-flash-lite"
 api_key_env = "GOOGLE_API_KEY"
 timeout_seconds = 30
 priority = 1
+
+[[providers.query]]
+name = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+model = "qwen/qwen3-next-80b:free"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_seconds = 30
+priority = 2
 
 # Type taxonomy: the runtime source of truth for extraction prompts (D18).
 # These are rendered into the extraction prompt template at startup.

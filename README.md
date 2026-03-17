@@ -12,7 +12,10 @@
 # **Imprint** MACE 
 
 
-Memory And Context Engine (MACE) for AI agents. Imprint turns conversations into a structured knowledge graph and uses it to form the agent's working context -- what it knows, what was decided, what matters right now. Cursor, Claude Code, any MCP client. Single Go binary, single SQLite file. Experimental.
+Memory And Context Engine (MACE) for AI agents. Imprint turns conversations into a structured knowledge graph and uses it to form the agent's working context -- what it knows, what was decided, what matters right now. Cursor, Claude Code, any MCP client. Single Go binary, single SQLite file.
+
+> **Status: Experimental (v0.1.x)**
+> Imprint is functional and deployed, but the API, MCP tools, config format, and database schema may change between versions. 241 tests pass, dual-layer memory works for OpenClaw, but multi-platform integration and production hardening are in progress. Feedback and contributions welcome.
 
 ## The Problem
 
@@ -109,6 +112,8 @@ Set your LLM provider API keys as environment variables:
 export GOOGLE_API_KEY="your-key"
 export OPENAI_API_KEY="your-key"
 export ANTHROPIC_API_KEY="your-key"
+export OPENROUTER_API_KEY="your-key"   # optional -- 29 free models
+export VOYAGE_API_KEY="your-key"       # optional -- 200M free tokens/year
 ```
 
 The config file defines provider chains (ordered fallback), type taxonomy, and prompt paths. See `config.toml.example` for the full reference.
@@ -328,15 +333,44 @@ base_url = "http://localhost:11434"
 model = "qwen3.5:27b"
 timeout_seconds = 120
 priority = 3
+
+# OpenRouter -- single API key, 300+ models, 29 free
+[[providers.extraction]]
+name = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+model = "qwen/qwen3-next-80b:free"
+api_key_env = "OPENROUTER_API_KEY"
+timeout_seconds = 120
+priority = 4
+
+# Voyage AI -- high-quality embeddings, 200M free tokens/year
+[[providers.embedding]]
+name = "voyage"
+base_url = "https://api.voyageai.com/v1"
+model = "voyage-4-lite"
+api_key_env = "VOYAGE_API_KEY"
+timeout_seconds = 15
+priority = 1
 ```
 
-Provider detection is automatic: `"anthropic"` routes to the Anthropic Messages API, `"ollama"` routes to the Ollama native API, everything else uses the OpenAI-compatible API (covers OpenAI, Google, Groq, Together, Fireworks, vLLM, llama.cpp, LM Studio, and any other OpenAI-compatible endpoint).
+Provider detection is automatic: `"anthropic"` routes to the Anthropic Messages API, `"ollama"` routes to the Ollama native API, everything else uses the OpenAI-compatible API (covers OpenAI, Google, OpenRouter, Voyage AI, Groq, Together, Fireworks, vLLM, llama.cpp, LM Studio, and any other OpenAI-compatible endpoint).
+
+### Supported Providers
+
+| Provider | API | Free tier | Auth env var |
+|----------|-----|-----------|--------------|
+| Google Gemini | OpenAI-compatible | Generous | `GOOGLE_API_KEY` |
+| OpenAI | Native | None | `OPENAI_API_KEY` |
+| Anthropic | Native (Messages API) | None | `ANTHROPIC_API_KEY` |
+| Ollama | Native | Self-hosted | None |
+| OpenRouter | OpenAI-compatible | 29 free models | `OPENROUTER_API_KEY` |
+| Voyage AI | OpenAI-compatible (embed) | 200M tokens/year | `VOYAGE_API_KEY` |
 
 ### Tested Models
 
-**Extraction:** Gemini 2.5 Flash Lite, Claude Haiku 4, GPT-5 Nano, Qwen 3.5 27B (local via Ollama)
+**Extraction:** Gemini 2.5 Flash Lite, Claude Haiku 4, GPT-5 Nano, Qwen 3.5 27B (Ollama), Qwen3 Next 80B (OpenRouter free)
 
-**Embedding:** OpenAI text-embedding-3-small, nomic-embed-text (Ollama)
+**Embedding:** OpenAI text-embedding-3-small, Voyage voyage-4-lite, nomic-embed-text (Ollama)
 
 ### Type Taxonomy
 

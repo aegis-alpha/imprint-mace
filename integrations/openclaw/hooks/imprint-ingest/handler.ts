@@ -3,8 +3,9 @@ import { join } from "path";
 import { homedir } from "os";
 
 const MIN_LENGTH = 20;
-let verified = false;
-let disabled = false;
+const RECHECK_INTERVAL_MS = 60_000;
+let reachable = false;
+let lastCheckAt = 0;
 
 function getImprintURL(): string {
   const envURL = process.env.IMPRINT_URL;
@@ -19,21 +20,22 @@ function getImprintURL(): string {
   return "http://localhost:8080";
 }
 
-async function ensureReachable(url: string): Promise<boolean> {
-  if (disabled) return false;
-  if (verified) return true;
+async function checkReachable(url: string): Promise<boolean> {
+  const now = Date.now();
+  if (reachable) return true;
+  if (now - lastCheckAt < RECHECK_INTERVAL_MS) return false;
+  lastCheckAt = now;
   try {
     const res = await fetch(`${url}/status`, {
       signal: AbortSignal.timeout(3000),
     });
     if (res.ok) {
-      verified = true;
+      reachable = true;
       return true;
     }
   } catch {}
-  disabled = true;
   console.error(
-    `[imprint-ingest] Imprint not reachable at ${url} -- hook disabled. ` +
+    `[imprint-ingest] Imprint not reachable at ${url} -- will retry in ${RECHECK_INTERVAL_MS / 1000}s. ` +
       `Set IMPRINT_URL env or check that imprint serve is running.`,
   );
   return false;
@@ -56,7 +58,7 @@ const handler = async (event: any) => {
   const source = `realtime:${sessionId}`;
 
   void (async () => {
-    if (!(await ensureReachable(url))) return;
+    if (!(await checkReachable(url))) return;
     try {
       await fetch(`${url}/ingest`, {
         method: "POST",

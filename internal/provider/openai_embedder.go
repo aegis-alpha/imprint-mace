@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type OpenAIEmbedder struct {
@@ -42,6 +43,10 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	if strings.Contains(e.baseURL, "openrouter.ai") {
+		req.Header.Set("HTTP-Referer", "https://github.com/aegis-alpha/imprint-MACE")
+		req.Header.Set("X-Title", "Imprint MACE")
+	}
 
 	resp, err := e.client.Do(req)
 	if err != nil {

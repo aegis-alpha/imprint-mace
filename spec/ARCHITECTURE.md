@@ -56,7 +56,25 @@ Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). N
 - The `Extractor` hydrates the raw LLM output: generates ULID IDs, sets timestamps, attaches source info.
 - Every extraction call is logged to `extraction_log` (provider, model, tokens, duration, counts, errors) via `ExtractionLogger`.
 
-### 1.5 Embedding
+### 1.5 Dual-Layer Memory (D27)
+
+Realtime and batch ingest coexist for the same session. Realtime facts are fast but coarse; batch facts are richer (full file references, line ranges). When batch catches up, it supersedes the realtime facts.
+
+**Realtime path:**
+
+1. `WithSessionID(id)` is an `IngestOption` that stamps all extracted facts with `realtime:{sessionID}` in the `source_file` field.
+2. The OpenClaw `imprint-ingest` hook calls `POST /ingest` on every message, passing the session ID. Facts are available immediately but lack file-level source references.
+
+**Batch supersede:**
+
+1. When `BatchAdapter.processFile()` processes a transcript, it reads the `session` field from YAML frontmatter.
+2. After ingesting all chunks, if `session` is non-empty, it calls `store.SupersedeRealtimeBySession(sessionID)`.
+3. This marks all facts where `source_file = 'realtime:{sessionID}'` as superseded (`superseded_by = 'batch-replaced'`).
+4. The batch facts replace them with full file references and line ranges.
+
+**Design constraint:** Cosine similarity is not used for cross-path supersede. Simulation (D002) showed a 73% miss rate due to granularity drift between realtime single-message facts and batch multi-message chunk facts. Session-boundary supersede is deterministic and reliable.
+
+### 1.6 Embedding
 
 `internal/provider.EmbedderChain` generates vector embeddings for fact content.
 
@@ -300,7 +318,7 @@ Provider type is determined by the `name` field in config:
 | `ollama` | Ollama native API (`/api/chat`) | None |
 | anything else | OpenAI-compatible (`/v1/chat/completions`) | `Bearer` token |
 
-The OpenAI-compatible provider covers OpenAI, Google Gemini, Groq, Together, Fireworks, DeepInfra, vLLM, llama.cpp, and LM Studio.
+The OpenAI-compatible provider covers OpenAI, Google Gemini, OpenRouter, Voyage AI, Groq, Together, Fireworks, DeepInfra, vLLM, llama.cpp, and LM Studio. OpenRouter sends additional `HTTP-Referer` and `X-Title` headers for app identification when `base_url` contains `openrouter.ai`.
 
 ### 6.2 Fallback
 
