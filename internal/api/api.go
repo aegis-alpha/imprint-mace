@@ -208,7 +208,9 @@ func (h *Handler) handleContext(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(text))
+	if _, err := w.Write([]byte(text)); err != nil {
+		h.logger.Error("context write failed", "error", err)
+	}
 }
 
 type ingestRequest struct {

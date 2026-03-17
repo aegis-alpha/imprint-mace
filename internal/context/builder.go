@@ -55,10 +55,10 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 			if err != nil {
 				b.logger.Warn("vector search failed", "error", err)
 			} else {
-				for _, sf := range results {
-					if !seen[sf.Fact.ID] {
-						seen[sf.Fact.ID] = true
-						relevant = append(relevant, sf.Fact)
+				for i := range results {
+					if !seen[results[i].Fact.ID] {
+						seen[results[i].Fact.ID] = true
+						relevant = append(relevant, results[i].Fact)
 					}
 				}
 			}
@@ -72,10 +72,10 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 			if err != nil {
 				b.logger.Warn("text search failed", "error", err)
 			} else {
-				for _, sf := range results {
-					if !seen[sf.Fact.ID] {
-						seen[sf.Fact.ID] = true
-						relevant = append(relevant, sf.Fact)
+				for i := range results {
+					if !seen[results[i].Fact.ID] {
+						seen[results[i].Fact.ID] = true
+						relevant = append(relevant, results[i].Fact)
 					}
 				}
 			}
@@ -107,16 +107,16 @@ func formatContext(relevant, preferences, recent []model.Fact, seen map[string]b
 
 	if len(relevant) > 0 {
 		var lines []string
-		for _, f := range relevant {
-			lines = append(lines, formatFact(f, true))
+		for i := range relevant {
+			lines = append(lines, formatFact(&relevant[i], true))
 		}
 		sections = append(sections, "## Relevant Context\n"+strings.Join(lines, "\n"))
 	}
 
 	if len(preferences) > 0 {
 		var lines []string
-		for _, f := range preferences {
-			lines = append(lines, fmt.Sprintf("- %s: %s", f.Subject, f.Content))
+		for i := range preferences {
+			lines = append(lines, fmt.Sprintf("- %s: %s", preferences[i].Subject, preferences[i].Content))
 		}
 		sections = append(sections, "## Preferences\n"+strings.Join(lines, "\n"))
 	}
@@ -125,8 +125,8 @@ func formatContext(relevant, preferences, recent []model.Fact, seen map[string]b
 		dedupRecent := dedupAgainst(recent, seen)
 		if len(dedupRecent) > 0 {
 			var lines []string
-			for _, f := range dedupRecent {
-				lines = append(lines, formatFact(f, false))
+			for i := range dedupRecent {
+				lines = append(lines, formatFact(&dedupRecent[i], false))
 			}
 			sections = append(sections, "## Recent\n"+strings.Join(lines, "\n"))
 		}
@@ -135,7 +135,7 @@ func formatContext(relevant, preferences, recent []model.Fact, seen map[string]b
 	return strings.Join(sections, "\n\n")
 }
 
-func formatFact(f model.Fact, withConfidence bool) string {
+func formatFact(f *model.Fact, withConfidence bool) string {
 	date := f.CreatedAt.Format("2006-01-02")
 	if withConfidence {
 		return fmt.Sprintf("- [%s] %s: %s (confidence=%.2f, %s)", f.FactType, f.Subject, f.Content, f.Confidence, date)
@@ -145,10 +145,10 @@ func formatFact(f model.Fact, withConfidence bool) string {
 
 func dedupAgainst(facts []model.Fact, seen map[string]bool) []model.Fact {
 	var result []model.Fact
-	for _, f := range facts {
-		if !seen[f.ID] {
-			seen[f.ID] = true
-			result = append(result, f)
+	for i := range facts {
+		if !seen[facts[i].ID] {
+			seen[facts[i].ID] = true
+			result = append(result, facts[i])
 		}
 	}
 	return result

@@ -357,8 +357,8 @@ func (s *Server) handleContextPreferences(ctx context.Context, req mcp.ReadResou
 		return nil, fmt.Errorf("list preferences: %w", err)
 	}
 	var lines []string
-	for _, f := range prefs {
-		lines = append(lines, fmt.Sprintf("- %s: %s", f.Subject, f.Content))
+	for i := range prefs {
+		lines = append(lines, fmt.Sprintf("- %s: %s", prefs[i].Subject, prefs[i].Content))
 	}
 	text := strings.Join(lines, "\n")
 	return []mcp.ResourceContents{
@@ -377,9 +377,9 @@ func (s *Server) handleContextRecent(ctx context.Context, req mcp.ReadResourceRe
 		return nil, fmt.Errorf("list recent facts: %w", err)
 	}
 	var lines []string
-	for _, f := range facts {
-		date := f.CreatedAt.Format("2006-01-02 15:04")
-		lines = append(lines, fmt.Sprintf("- [%s] %s: %s (%s)", f.FactType, f.Subject, f.Content, date))
+	for i := range facts {
+		date := facts[i].CreatedAt.Format("2006-01-02 15:04")
+		lines = append(lines, fmt.Sprintf("- [%s] %s: %s (%s)", facts[i].FactType, facts[i].Subject, facts[i].Content, date))
 	}
 	text := strings.Join(lines, "\n")
 	return []mcp.ResourceContents{
