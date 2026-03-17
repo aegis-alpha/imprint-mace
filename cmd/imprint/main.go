@@ -128,11 +128,12 @@ func main() {
 	case "serve":
 		hostFlag, portFlag, watchFlag := "", 0, ""
 		for _, a := range args[1:] {
-			if strings.HasPrefix(a, "--host=") {
+			switch {
+			case strings.HasPrefix(a, "--host="):
 				hostFlag = a[7:]
-			} else if strings.HasPrefix(a, "--port=") {
+			case strings.HasPrefix(a, "--port="):
 				fmt.Sscanf(a[7:], "%d", &portFlag)
-			} else if strings.HasPrefix(a, "--watch=") {
+			case strings.HasPrefix(a, "--watch="):
 				watchFlag = a[8:]
 			}
 		}
@@ -441,7 +442,8 @@ func runEmbedBackfill(logger *slog.Logger, cfgPath, modelFilter string) {
 	}
 
 	success, failed := 0, 0
-	for _, f := range facts {
+	for i := range facts {
+		f := &facts[i]
 		vec, err := embChain.Embed(ctx, f.Content)
 		if err != nil {
 			logger.Warn("embed failed", "fact_id", f.ID, "error", err)
@@ -778,7 +780,8 @@ func writeCSV(logger *slog.Logger, path string, lines []string) {
 
 func factsToCSV(facts []model.Fact) []string {
 	lines := []string{"id,fact_type,subject,content,confidence,source_file,valid_from,valid_until,superseded_by,created_at"}
-	for _, f := range facts {
+	for i := range facts {
+		f := &facts[i]
 		vf, vu := "", ""
 		if f.Validity.ValidFrom != nil {
 			vf = f.Validity.ValidFrom.Format(time.RFC3339)

@@ -79,9 +79,9 @@ func (e *Evolver) ReviewTaxonomy(ctx context.Context) ([]db.TaxonomyProposal, er
 	}
 
 	var actionable []db.TaxonomySignal
-	for _, s := range signals {
-		if s.SignalType == "custom_frequency" || s.SignalType == "low_confidence" {
-			actionable = append(actionable, s)
+	for i := range signals {
+		if signals[i].SignalType == "custom_frequency" || signals[i].SignalType == "low_confidence" {
+			actionable = append(actionable, signals[i])
 		}
 	}
 
@@ -170,22 +170,23 @@ func (e *Evolver) ValidateProposals(ctx context.Context) error {
 		return fmt.Errorf("list proposed: %w", err)
 	}
 
-	for _, p := range proposals {
+	for i := range proposals {
+		p := &proposals[i]
 		switch p.Action {
 		case "add":
-			if err := e.validateAdd(ctx, p); err != nil {
+			if err := e.validateAdd(ctx, *p); err != nil {
 				e.logger.Error("validate add failed", "type_name", p.TypeName, "error", err)
 			}
 		case "remove":
-			if err := e.validateRemove(ctx, p); err != nil {
+			if err := e.validateRemove(ctx, *p); err != nil {
 				e.logger.Error("validate remove failed", "type_name", p.TypeName, "error", err)
 			}
 		case "merge":
-			if err := e.validateMerge(ctx, p); err != nil {
+			if err := e.validateMerge(ctx, *p); err != nil {
 				e.logger.Error("validate merge failed", "type_name", p.TypeName, "error", err)
 			}
 		case "rename":
-			if err := e.validateRename(ctx, p); err != nil {
+			if err := e.validateRename(ctx, *p); err != nil {
 				e.logger.Error("validate rename failed", "type_name", p.TypeName, "error", err)
 			}
 		default:
@@ -364,12 +365,12 @@ func (e *Evolver) validateRename(ctx context.Context, p db.TaxonomyProposal) err
 func buildMergePrompt(sourceType, targetType string, sourceFacts, targetFacts []model.Fact) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Here are facts of type %q:\n", sourceType)
-	for _, f := range sourceFacts {
-		fmt.Fprintf(&b, "- [%s] %s\n", f.Subject, f.Content)
+	for i := range sourceFacts {
+		fmt.Fprintf(&b, "- [%s] %s\n", sourceFacts[i].Subject, sourceFacts[i].Content)
 	}
 	fmt.Fprintf(&b, "\nHere are facts of type %q:\n", targetType)
-	for _, f := range targetFacts {
-		fmt.Fprintf(&b, "- [%s] %s\n", f.Subject, f.Content)
+	for i := range targetFacts {
+		fmt.Fprintf(&b, "- [%s] %s\n", targetFacts[i].Subject, targetFacts[i].Content)
 	}
 	fmt.Fprintf(&b, "\nQuestion: Are these two types semantically equivalent? Would merging %q into %q lose any meaningful distinction?\n", sourceType, targetType)
 	b.WriteString("\nAnswer as JSON: {\"should_merge\": true/false, \"reason\": \"...\"}")
@@ -379,8 +380,8 @@ func buildMergePrompt(sourceType, targetType string, sourceFacts, targetFacts []
 func buildRenamePrompt(oldName, newName string, facts []model.Fact) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Here are facts of type %q:\n", oldName)
-	for _, f := range facts {
-		fmt.Fprintf(&b, "- [%s] %s\n", f.Subject, f.Content)
+	for i := range facts {
+		fmt.Fprintf(&b, "- [%s] %s\n", facts[i].Subject, facts[i].Content)
 	}
 	fmt.Fprintf(&b, "\nThe proposed new name is %q.\n", newName)
 	fmt.Fprintf(&b, "\nQuestion: Does %q better describe these facts than %q? Is the rename justified?\n", newName, oldName)
@@ -408,7 +409,8 @@ func (e *Evolver) EffectiveTypesWithProposals(ctx context.Context, base config.T
 		ConnectionTypes: append([]config.TypeDef{}, base.ConnectionTypes...),
 	}
 
-	for _, p := range applied {
+	for i := range applied {
+		p := &applied[i]
 		switch p.Action {
 		case "add":
 			td := parseDefinition(p.Definition)
@@ -542,7 +544,8 @@ func cosineSimilarity(a, b []float32) float64 {
 
 func formatSignals(signals []db.TaxonomySignal) string {
 	var b strings.Builder
-	for _, s := range signals {
+	for i := range signals {
+		s := &signals[i]
 		fmt.Fprintf(&b, "- [%s] %s/%s: count=%d details=%s\n",
 			s.SignalType, s.TypeCategory, s.TypeName, s.Count, s.Details)
 	}
@@ -551,8 +554,8 @@ func formatSignals(signals []db.TaxonomySignal) string {
 
 func collectSignalIDs(signals []db.TaxonomySignal) []string {
 	ids := make([]string, len(signals))
-	for i, s := range signals {
-		ids[i] = s.ID
+	for i := range signals {
+		ids[i] = signals[i].ID
 	}
 	return ids
 }
@@ -564,8 +567,6 @@ func stripMarkdownFences(s string) string {
 			s = s[idx+1:]
 		}
 	}
-	if strings.HasSuffix(s, "```") {
-		s = s[:len(s)-3]
-	}
+	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
 }

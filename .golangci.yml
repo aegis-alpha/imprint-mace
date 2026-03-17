@@ -1,0 +1,76 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - sqlite_fts5
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosec
+    - gocritic
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      exclude-functions:
+        - (io.Closer).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - (*net.Listener).Close
+        - (net/http.ResponseWriter).Write
+        - encoding/json.Unmarshal
+        - (*database/sql.DB).ExecContext
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Sscanf
+        - os.Remove
+        - os.RemoveAll
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - hugeParam
+        - exitAfterDefer
+    gosec:
+      excludes:
+        - G101
+        - G104
+        - G114
+        - G115
+        - G202
+        - G301
+        - G304
+        - G306
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+      - text: "Error return value of .*(Close|close).*is not checked"
+        linters:
+          - errcheck
+    paths:
+      - archive
+      - research
+      - deploy
+      - prompts
+      - integrations
+      - spec
+      - tools
+      - .cursor
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

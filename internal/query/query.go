@@ -246,28 +246,32 @@ func (q *Querier) mergeAndRank(r *retrievalResult) []rankedFact {
 	scores := map[string]float64{}
 	facts := map[string]model.Fact{}
 
-	for rank, sf := range r.factsByVector {
+	for rank := range r.factsByVector {
+		sf := &r.factsByVector[rank]
 		scores[sf.Fact.ID] += 1.0 / (k + float64(rank+1))
 		facts[sf.Fact.ID] = sf.Fact
 	}
 
-	for rank, sf := range r.factsByText {
+	for rank := range r.factsByText {
+		sf := &r.factsByText[rank]
 		scores[sf.Fact.ID] += 1.0 / (k + float64(rank+1))
 		facts[sf.Fact.ID] = sf.Fact
 	}
 
-	for rank, gf := range r.graphFacts {
+	for rank := range r.graphFacts {
+		gf := &r.graphFacts[rank]
 		scores[gf.ID] += 1.0 / (k + float64(rank+1))
-		facts[gf.ID] = gf
+		facts[gf.ID] = *gf
 	}
 
 	now := time.Now().UTC()
 	ranked := make([]rankedFact, 0, len(facts))
-	for id, fact := range facts {
-		if fact.Validity.ValidUntil != nil && fact.Validity.ValidUntil.Before(now) {
+	for id := range facts {
+		f := facts[id]
+		if f.Validity.ValidUntil != nil && f.Validity.ValidUntil.Before(now) {
 			continue
 		}
-		ranked = append(ranked, rankedFact{fact: fact, score: scores[id]})
+		ranked = append(ranked, rankedFact{fact: f, score: scores[id]})
 	}
 
 	sortByScore(ranked)
@@ -301,8 +305,8 @@ func (q *Querier) enrichWithContext(ctx context.Context, ranked []rankedFact, r 
 	}
 
 	enriched := make([]enrichedFact, len(ranked))
-	for i, rf := range ranked {
-		enriched[i] = enrichedFact{rankedFact: rf}
+	for i := range ranked {
+		enriched[i] = enrichedFact{rankedFact: ranked[i]}
 	}
 
 	if q.transcriptDir == "" {
@@ -408,8 +412,8 @@ func (q *Querier) buildPrompt(question string, facts []enrichedFact) builtPrompt
 
 	if len(facts) > 0 {
 		var factLines []string
-		for _, ef := range facts {
-			f := ef.fact
+		for i := range facts {
+			f := &facts[i].fact
 			date := f.CreatedAt.Format("2006-01-02")
 			line := fmt.Sprintf("- [%s] (%s, confidence=%.2f, %s) %s: %s",
 				f.ID, f.FactType, f.Confidence, date, f.Subject, f.Content)
@@ -419,7 +423,8 @@ func (q *Querier) buildPrompt(question string, facts []enrichedFact) builtPrompt
 	}
 
 	var contextParts []string
-	for _, ef := range facts {
+	for i := range facts {
+		ef := &facts[i]
 		if ef.context != "" {
 			var header string
 			if ef.fact.Source.LineRange != nil {
@@ -474,9 +479,7 @@ func stripMarkdownFences(s string) string {
 			s = s[idx+1:]
 		}
 	}
-	if strings.HasSuffix(s, "```") {
-		s = s[:len(s)-3]
-	}
+	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
 }
 

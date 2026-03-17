@@ -132,8 +132,8 @@ func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*Consolidate
 	consolidationID := db.NewID()
 
 	factIDs := make([]string, len(facts))
-	for i, f := range facts {
-		factIDs[i] = f.ID
+	for i := range facts {
+		factIDs[i] = facts[i].ID
 	}
 
 	cons := &model.Consolidation{
@@ -184,7 +184,8 @@ func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*Consolidate
 
 func formatFactsForLLM(facts []model.Fact) string {
 	var b strings.Builder
-	for _, f := range facts {
+	for i := range facts {
+		f := &facts[i]
 		fmt.Fprintf(&b, "- [%s] (%s) %s: %s\n", f.ID, f.FactType, f.Subject, f.Content)
 	}
 	return b.String()
@@ -197,8 +198,6 @@ func stripMarkdownFences(s string) string {
 			s = s[idx+1:]
 		}
 	}
-	if strings.HasSuffix(s, "```") {
-		s = s[:len(s)-3]
-	}
+	s = strings.TrimSuffix(s, "```")
 	return strings.TrimSpace(s)
 }
