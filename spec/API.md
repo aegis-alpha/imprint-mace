@@ -89,20 +89,15 @@ Retrieve relevant context from the knowledge base without LLM synthesis. Returns
 |-----------|------|----------|-------------|
 | `hint` | string | no | Search hint for semantic relevance (e.g. user's message). If empty, returns only preferences and recent facts. |
 
-**Response (200):** `Content-Type: text/plain`
+**Response (200):**
 
-```
-## Relevant Context
-- [decision] Acme: Decided to use Go for the Acme project (confidence=0.95, 2026-03-15)
-
-## Preferences
-- Alice: Prefers dark mode in all editors
-
-## Recent
-- [project] Acme: Acme uses SQLite for storage (2026-03-15)
+```json
+{
+  "context": "## Relevant Context\n- [decision] Acme: Decided to use Go for the Acme project (confidence=0.95, 2026-03-15)\n\n## Preferences\n- Alice: Prefers dark mode in all editors\n\n## Recent\n- [project] Acme: Acme uses SQLite for storage (2026-03-15)"
+}
 ```
 
-Sections are omitted when empty. Returns an empty body (200) when no facts are found.
+The `context` field contains structured markdown text with sections (Relevant Context, Preferences, Recent). Sections are omitted when empty. Returns `{"context": ""}` when no facts are found.
 
 **Comparison with GET /query:**
 

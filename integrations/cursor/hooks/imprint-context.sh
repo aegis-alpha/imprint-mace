@@ -45,18 +45,22 @@ if ! curl -sf --max-time 3 "${URL}/status" > /dev/null 2>&1; then
   exit 0
 fi
 
-CONTEXT=$(curl -sf --max-time "$TIMEOUT" "${URL}/context" 2>/dev/null || true)
+RESPONSE=$(curl -sf --max-time "$TIMEOUT" "${URL}/context" 2>/dev/null || true)
 
-if [ -z "$CONTEXT" ] || [ "$CONTEXT" = "null" ]; then
+if [ -z "$RESPONSE" ]; then
   echo '{}'
   exit 0
 fi
 
 if command -v jq > /dev/null 2>&1; then
+  CONTEXT=$(echo "$RESPONSE" | jq -r '.context // empty')
+  if [ -z "$CONTEXT" ]; then
+    echo '{}'
+    exit 0
+  fi
   jq -n --arg ctx "$CONTEXT" '{"additional_context": $ctx}'
 else
-  ESCAPED=$(printf '%s' "$CONTEXT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n' ' ')
-  printf '{"additional_context": "%s"}\n' "$ESCAPED"
+  echo '{}'
 fi
 
 exit 0

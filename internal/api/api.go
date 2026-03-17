@@ -206,11 +206,11 @@ func (h *Handler) handleContext(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "context build failed")
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write([]byte(text)); err != nil {
-		h.logger.Error("context write failed", "error", err)
-	}
+	writeJSON(w, http.StatusOK, contextResponse{Context: text})
+}
+
+type contextResponse struct {
+	Context string `json:"context"`
 }
 
 type ingestRequest struct {

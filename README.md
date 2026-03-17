@@ -207,81 +207,18 @@ Imprint includes an MCP server for integration with Cursor, Claude Code, and oth
 | `imprint_update_fact` | Update metadata on an existing fact (confidence, expiry, subject) |
 | `imprint_supersede_fact` | Replace a fact with updated content, marking the old one as superseded |
 
-### Cursor
+### Platform Setup
 
-Add to `.cursor/mcp.json`:
+Each platform has a dedicated setup guide with MCP config, hook scripts, and rules files:
 
-```json
-{
-  "mcpServers": {
-    "imprint": {
-      "command": "/path/to/imprint",
-      "args": ["mcp", "--config", "/path/to/config.toml"]
-    }
-  }
-}
-```
-
-### Claude Code
-
-Add to `.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "imprint": {
-      "command": "/path/to/imprint",
-      "args": ["mcp", "--config", "/path/to/config.toml"]
-    }
-  }
-}
-```
-
-### OpenClaw
-
-OpenClaw integrates via hooks -- deterministic, fires on every message without relying on the model to call tools.
-
-**Install hooks:**
-
-```bash
-cp -r integrations/openclaw/hooks/imprint-ingest ~/.openclaw/hooks/
-cp -r integrations/openclaw/hooks/imprint-query ~/.openclaw/hooks/
-```
-
-**Configure:**
-
-If `imprint serve` is running locally, hooks discover the server automatically via `~/.imprint/serve.json` -- no configuration needed.
-
-To override (e.g. remote server), set `IMPRINT_URL` in the hook's env config:
-
-```json
-{
-  "entries": {
-    "imprint-ingest": { "enabled": true, "env": { "IMPRINT_URL": "http://your-server:8080" } },
-    "imprint-query": { "enabled": true, "env": { "IMPRINT_URL": "http://your-server:8080" } }
-  }
-}
-```
-
-**What the hooks do:**
-
-- `imprint-ingest` -- sends every message to `POST /ingest` for knowledge extraction (fire-and-forget)
-- `imprint-query` -- calls `GET /query` with the message content and injects the answer as context for the agent (5s timeout)
-
-Both hooks listen for `message:preprocessed` events and use `bodyForAgent` (enriched body after media/link understanding), falling back to `body`.
-
-## Platform Integrations
-
-Each platform integration provides three layers: a **hook** for deterministic context injection at session start, an **MCP server** for on-demand tool access, and a **rules file** for agent behavior guidance.
-
-| Platform | Hook | MCP | Rules | Setup |
-|----------|------|-----|-------|-------|
+| Platform | Hook | MCP | Rules | Setup Guide |
+|----------|------|-----|-------|-------------|
+| Cursor | sessionStart | Yes | SKILL.md | [integrations/cursor/](integrations/cursor/) |
+| Claude Code | SessionStart | Yes | AGENTS.md | [integrations/claude-code/](integrations/claude-code/) |
+| Gemini CLI | SessionStart | Yes | GEMINI.md | [integrations/gemini-cli/](integrations/gemini-cli/) |
 | OpenClaw | 3 hooks (ingest, query, transcript) | Yes | AGENTS.md + TOOLS.md | [integrations/openclaw/](integrations/openclaw/) |
-| Cursor | sessionStart hook | Yes | SKILL.md | [integrations/cursor/](integrations/cursor/) |
-| Claude Code | SessionStart hook | Yes | AGENTS.md (for CLAUDE.md) | [integrations/claude-code/](integrations/claude-code/) |
-| Gemini CLI | SessionStart hook | Yes | GEMINI.md | [integrations/gemini-cli/](integrations/gemini-cli/) |
 
-All hooks call `GET /context` on the Imprint HTTP API (retrieval-only, no LLM synthesis, 50-200ms). Agents that need full LLM-synthesized answers use the `imprint_query` MCP tool directly.
+Hooks call `GET /context` (retrieval-only, 50-200ms). Agents that need full LLM-synthesized answers use the `imprint_query` MCP tool directly.
 
 ## Data Model
 
@@ -418,30 +355,15 @@ The entire cycle is autonomous. No human intervention needed, though all proposa
 
 ### What works
 
-- Extract facts, entities, and relationships from any text via LLM
-- Store in local SQLite knowledge graph with vector search (sqlite-vec) and full-text search (FTS5)
-- Batch process directories of transcript files with SHA-256 dedup
-- Watch directories for new/changed files (fsnotify)
-- Consolidate facts into higher-order insights (background or manual)
-- Self-evolving type taxonomy (signal collection, LLM review, auto-apply)
-- Embedding support (OpenAI, Ollama) with model metadata tracking
-- Transcripts as first-class objects: metadata in DB, text on disk, back-references from facts to source file + line range
-- Frontmatter parser: YAML frontmatter -> transcript metadata (source, session, date, participants, topic)
-- Standardized transcript input format: platform adapters convert native JSONL to annotated markdown
-- ReadContext: load surrounding lines from transcript files on disk to enrich query answers
-- Query layer: hybrid retrieval across 5 parallel layers (vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph traversal), Reciprocal Rank Fusion merge, ReadContext enrichment, LLM synthesis with citations
-- MCP server (stdio transport, 7 tools) for Cursor, Claude Code, and other MCP-compatible agents
-- HTTP API: 9 REST endpoints (POST /ingest, GET /query, GET /context, GET /status, GET /entities, GET /facts, GET /graph/{id}, PATCH /facts/{id}, POST /facts/{id}/supersede)
-- Platform adapters: Cursor, Claude Code, OpenClaw (Python scripts in integrations/{platform}/adapter/)
-- OpenClaw hooks: deterministic integration via message:preprocessed hooks (imprint-ingest for realtime knowledge extraction, imprint-query for automatic context retrieval)
-- Self-editing memory: agents can update fact metadata or supersede facts with corrected content
-- Semantic dedup during ingest: cosine similarity check skips near-duplicate facts (configurable threshold)
-- Context TTL: context-type facts auto-expire after configurable days
-- GC: delete expired facts past a retention window
-- Export: dump entire knowledge base as JSON or CSV
-- Agent integration skills: Cursor (integrations/cursor/SKILL.md) and Claude Code (integrations/claude-code/AGENTS.md)
-- 11 CLI subcommands: `ingest`, `ingest-dir`, `watch`, `consolidate`, `status`, `embed-backfill`, `query`, `serve`, `mcp`, `export`, `gc`
-- 238 tests
+- **Knowledge extraction:** facts, entities, and relationships from any text via LLM, with semantic dedup and configurable type taxonomy
+- **Hybrid query:** 5 parallel retrieval layers (vector, FTS5, graph), RRF merge, ReadContext enrichment from source files, LLM synthesis with citations
+- **Self-evolving taxonomy:** signal collection from extraction results, LLM review, validated proposals, auto-apply -- fully autonomous
+- **Dual-layer memory:** realtime ingest via hooks/API (temporary, session-scoped) + batch ingest from transcript files (permanent, with source references). Session-boundary supersede.
+- **Platform integrations:** deterministic hooks for OpenClaw, Cursor, Claude Code, Gemini CLI. MCP server (7 tools) for any MCP client. HTTP API (9 endpoints).
+- **Consolidation:** background grouping of related facts, connection discovery, higher-order insights
+- **Transcript-first storage:** files on disk are the source of truth, DB is a derived index with back-references to file + line range
+- **Self-editing memory:** agents can update fact metadata or supersede facts with corrected content via MCP tools or HTTP API
+- **11 CLI subcommands**, 238 tests, Docker deployment with Watchtower auto-update
 
 ## Benchmarks
 

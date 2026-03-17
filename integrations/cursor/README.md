@@ -81,7 +81,7 @@ URL auto-discovery:
 - `imprint serve` running (for the hook)
 - `imprint` binary on PATH or full path in mcp.json (for MCP)
 - `curl` (for the hook script)
-- `jq` (optional, for robust JSON escaping; falls back to sed)
+- `jq` (for parsing the JSON response from Imprint)
 
 ## Known Limitations
 
