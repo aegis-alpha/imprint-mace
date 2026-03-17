@@ -15,7 +15,7 @@ type countingConsolidator struct {
 	calls atomic.Int32
 }
 
-func (c *countingConsolidator) Consolidate(ctx context.Context, limit int) (*ConsolidateResult, error) {
+func (c *countingConsolidator) Consolidate(ctx context.Context, limit int) ([]ConsolidateResult, error) {
 	c.calls.Add(1)
 	return nil, nil
 }

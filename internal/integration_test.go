@@ -125,25 +125,29 @@ func TestIntegration_FullPipeline(t *testing.T) {
 		t.Fatalf("write consolidation prompt: %v", err)
 	}
 
-	consol, err := consolidation.New(chain, store, consolPromptPath, types, logger)
+	consol, err := consolidation.New(chain, store, consolPromptPath, types, 0.40, logger)
 	if err != nil {
 		t.Fatalf("create consolidator: %v", err)
 	}
 
-	cResult, err := consol.Consolidate(ctx, 50)
+	cResults, err := consol.Consolidate(ctx, 50)
 	if err != nil {
 		t.Fatalf("consolidate: %v", err)
 	}
-	if cResult == nil {
-		t.Log("consolidation returned nil (fewer than 2 facts) -- skipping connection check")
+	if len(cResults) == 0 {
+		t.Log("consolidation returned no clusters -- skipping connection check")
 		return
 	}
-	t.Logf("consolidation: %d connections, importance=%.2f",
-		len(cResult.FactConnections), cResult.Consolidation.Importance)
+	totalConns := 0
+	for i := range cResults {
+		totalConns += len(cResults[i].FactConnections)
+	}
+	t.Logf("consolidation: %d clusters, %d connections, importance=%.2f",
+		len(cResults), totalConns, cResults[0].Consolidation.Importance)
 
 	// Step 5: Verify fact connections via one of the source facts
-	if len(cResult.Consolidation.SourceFactIDs) > 0 {
-		connections, err := store.ListFactConnections(ctx, cResult.Consolidation.SourceFactIDs[0])
+	if len(cResults[0].Consolidation.SourceFactIDs) > 0 {
+		connections, err := store.ListFactConnections(ctx, cResults[0].Consolidation.SourceFactIDs[0])
 		if err != nil {
 			t.Fatalf("list connections: %v", err)
 		}

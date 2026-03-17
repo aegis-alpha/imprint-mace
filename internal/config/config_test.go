@@ -279,6 +279,112 @@ func TestLoad_InvalidTOML(t *testing.T) {
 	}
 }
 
+// --- ContextConfig ---
+
+func TestEffectiveContextConfig_Defaults(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "KEY"
+timeout_seconds = 30
+priority = 1
+`
+	cfg := loadFromString(t, content)
+	eff := cfg.EffectiveContextConfig()
+
+	if eff.RecentHours != 24 {
+		t.Errorf("expected default recent_hours=24, got %d", eff.RecentHours)
+	}
+	if eff.MaxFacts != 20 {
+		t.Errorf("expected default max_facts=20, got %d", eff.MaxFacts)
+	}
+	if !eff.IncludePreferences {
+		t.Error("expected default include_preferences=true")
+	}
+}
+
+func TestEffectiveContextConfig_Overrides(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "KEY"
+timeout_seconds = 30
+priority = 1
+
+[context]
+recent_hours = 48
+max_facts = 50
+include_preferences = false
+`
+	cfg := loadFromString(t, content)
+	eff := cfg.EffectiveContextConfig()
+
+	if eff.RecentHours != 48 {
+		t.Errorf("expected recent_hours=48, got %d", eff.RecentHours)
+	}
+	if eff.MaxFacts != 50 {
+		t.Errorf("expected max_facts=50, got %d", eff.MaxFacts)
+	}
+	if eff.IncludePreferences {
+		t.Error("expected include_preferences=false")
+	}
+}
+
+// --- ClusterSimilarityThreshold ---
+
+func TestEffectiveClusterSimilarityThreshold_Default(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "KEY"
+timeout_seconds = 30
+priority = 1
+`
+	cfg := loadFromString(t, content)
+	got := cfg.EffectiveClusterSimilarityThreshold()
+	if got != 0.40 {
+		t.Errorf("expected default 0.40, got %f", got)
+	}
+}
+
+func TestEffectiveClusterSimilarityThreshold_Override(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[consolidation]
+cluster_similarity_threshold = 0.55
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "KEY"
+timeout_seconds = 30
+priority = 1
+`
+	cfg := loadFromString(t, content)
+	got := cfg.EffectiveClusterSimilarityThreshold()
+	if got != 0.55 {
+		t.Errorf("expected 0.55, got %f", got)
+	}
+}
+
 // --- helpers ---
 
 func loadFromString(t *testing.T, content string) *Config {

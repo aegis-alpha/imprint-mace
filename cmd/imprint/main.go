@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/config"
+	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/update"
 	"github.com/aegis-alpha/imprint-mace/internal/consolidation"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
@@ -70,6 +71,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  serve [--host=H] [--port=P] [--watch=PATH] Start HTTP API server (default 127.0.0.1:8080)")
 		fmt.Fprintln(os.Stderr, "  mcp                       Start MCP server (stdio transport)")
 		fmt.Fprintln(os.Stderr, "  export [--format=json|csv] [--output=path] Export knowledge base")
+		fmt.Fprintln(os.Stderr, "  context [HINT]            Build context snapshot for system prompt injection")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
 		fmt.Fprintln(os.Stderr, "  version                   Print version and exit")
 		os.Exit(1)
@@ -153,6 +155,12 @@ func main() {
 			}
 		}
 		runExport(logger, *cfgPath, format, output)
+	case "context":
+		hint := ""
+		if len(args) > 1 {
+			hint = strings.Join(args[1:], " ")
+		}
+		runContext(logger, *cfgPath, hint)
 	case "gc":
 		runGC(logger, *cfgPath)
 	case "version":
@@ -242,6 +250,43 @@ func createQuerier(logger *slog.Logger, cfg *config.Config, store db.Store) *que
 	return query.New(store, embedder, chain, transcriptDir, logger)
 }
 
+func createBuilder(cfg *config.Config, store db.Store, logger *slog.Logger) *impctx.Builder {
+	var embedder provider.Embedder
+	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	if err == nil && embChain != nil {
+		embedder = embChain
+	}
+
+	transcriptDir := ""
+	if cfg.Watcher.Path != "" {
+		transcriptDir = cfg.Watcher.Path
+	}
+
+	ctxCfg := cfg.EffectiveContextConfig()
+	return impctx.New(store, embedder, transcriptDir, impctx.BuilderConfig{
+		RecentHours:        ctxCfg.RecentHours,
+		MaxFacts:           ctxCfg.MaxFacts,
+		IncludePreferences: ctxCfg.IncludePreferences,
+	}, logger)
+}
+
+func runContext(logger *slog.Logger, cfgPath, hint string) {
+	cfg := loadConfig(logger, cfgPath)
+	store := openStore(logger, cfg)
+	defer store.Close()
+
+	builder := createBuilder(cfg, store, logger)
+
+	ctx := context.Background()
+	result, err := builder.Build(ctx, hint)
+	if err != nil {
+		logger.Error("context build failed", "error", err)
+		os.Exit(1)
+	}
+
+	fmt.Print(result)
+}
+
 func runConsolidation(ctx context.Context, logger *slog.Logger, cfg *config.Config, store db.Store) {
 	if len(cfg.Providers.Consolidation) == 0 {
 		return
@@ -252,16 +297,21 @@ func runConsolidation(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 		return
 	}
 	types := cfg.EffectiveTypes()
-	cons, err := consolidation.New(consChain, store, cfg.Prompts.Consolidation, types, logger)
+	threshold := cfg.EffectiveClusterSimilarityThreshold()
+	cons, err := consolidation.New(consChain, store, cfg.Prompts.Consolidation, types, threshold, logger)
 	if err != nil {
 		logger.Warn("failed to create consolidator", "error", err)
 		return
 	}
-	consResult, err := cons.Consolidate(ctx, cfg.Consolidation.MaxGroupSize)
+	results, err := cons.Consolidate(ctx, cfg.Consolidation.MaxGroupSize)
 	if err != nil {
 		logger.Warn("consolidation failed", "error", err)
-	} else if consResult != nil {
-		fmt.Printf("Consolidated: %d connections\n", len(consResult.FactConnections))
+	} else if len(results) > 0 {
+		totalConns := 0
+		for i := range results {
+			totalConns += len(results[i].FactConnections)
+		}
+		fmt.Printf("Consolidated: %d clusters, %d connections\n", len(results), totalConns)
 	}
 }
 
@@ -569,6 +619,7 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 
 	eng := createEngine(logger, cfg, store)
 	q := createQuerier(logger, cfg, store)
+	builder := createBuilder(cfg, store, logger)
 
 	if watchDir == "" {
 		watchDir = cfg.Watcher.Path
@@ -623,7 +674,7 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		addr = fmt.Sprintf("%s:%d", host, port)
 	}
 
-	handler := api.NewHandler(eng, store, q, version, logger)
+	handler := api.NewHandlerWithBuilder(eng, store, q, builder, version, logger)
 
 	ln, actualAddr, err := listenWithFallback(addr, 20, logger)
 	if err != nil {
@@ -659,8 +710,9 @@ func runMCP(logger *slog.Logger, cfgPath string) {
 
 	eng := createEngine(logger, cfg, store)
 	q := createQuerier(logger, cfg, store)
+	builder := createBuilder(cfg, store, logger)
 
-	srv := impmcp.New(eng, store, q, version, logger)
+	srv := impmcp.NewWithBuilder(eng, store, q, builder, version, logger)
 	if err := srv.Run(context.Background()); err != nil {
 		logger.Error("mcp server failed", "error", err)
 		os.Exit(1)

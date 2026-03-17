@@ -19,6 +19,7 @@ type Config struct {
 	DB            DBConfig            `toml:"db"`
 	Types         TypesConfig         `toml:"types"`
 	Prompts       PromptPaths         `toml:"prompts"`
+	Context       ContextConfig       `toml:"context"`
 }
 
 type APIConfig struct {
@@ -46,10 +47,18 @@ type ProviderChains struct {
 }
 
 type ConsolidationConfig struct {
-	IntervalMinutes          int     `toml:"interval_minutes"`
-	MinFacts                 int     `toml:"min_facts"`
-	MaxGroupSize             int     `toml:"max_group_size"`
-	DedupSimilarityThreshold float64 `toml:"dedup_similarity_threshold"`
+	IntervalMinutes             int     `toml:"interval_minutes"`
+	MinFacts                    int     `toml:"min_facts"`
+	MaxGroupSize                int     `toml:"max_group_size"`
+	DedupSimilarityThreshold    float64 `toml:"dedup_similarity_threshold"`
+	ClusterSimilarityThreshold  float64 `toml:"cluster_similarity_threshold"`
+}
+
+func (c *Config) EffectiveClusterSimilarityThreshold() float64 {
+	if c.Consolidation.ClusterSimilarityThreshold > 0 {
+		return c.Consolidation.ClusterSimilarityThreshold
+	}
+	return 0.40
 }
 
 type DBConfig struct {
@@ -115,6 +124,32 @@ type PromptPaths struct {
 	Extraction    string `toml:"extraction"`
 	Consolidation string `toml:"consolidation"`
 	Query         string `toml:"query"`
+}
+
+type ContextConfig struct {
+	RecentHours        int  `toml:"recent_hours"`
+	MaxFacts           int  `toml:"max_facts"`
+	IncludePreferences bool `toml:"include_preferences"`
+}
+
+func (c *Config) EffectiveContextConfig() ContextConfig {
+	hours := c.Context.RecentHours
+	if hours == 0 {
+		hours = 24
+	}
+	maxFacts := c.Context.MaxFacts
+	if maxFacts == 0 {
+		maxFacts = 20
+	}
+	inclPrefs := true
+	if c.Context.RecentHours > 0 || c.Context.MaxFacts > 0 {
+		inclPrefs = c.Context.IncludePreferences
+	}
+	return ContextConfig{
+		RecentHours:        hours,
+		MaxFacts:           maxFacts,
+		IncludePreferences: inclPrefs,
+	}
 }
 
 func DefaultTypes() TypesConfig {

@@ -14,7 +14,7 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 )
 
-// --- mock sender ---
+// --- mock senders ---
 
 type mockSender struct {
 	response *provider.Response
@@ -23,6 +23,20 @@ type mockSender struct {
 
 func (m *mockSender) Send(_ context.Context, _ provider.Request) (*provider.Response, error) {
 	return m.response, m.err
+}
+
+type queueSender struct {
+	responses []*provider.Response
+	idx       int
+}
+
+func (q *queueSender) Send(_ context.Context, _ provider.Request) (*provider.Response, error) {
+	if q.idx >= len(q.responses) {
+		return nil, fmt.Errorf("queueSender exhausted: called %d times but only %d responses", q.idx+1, len(q.responses))
+	}
+	resp := q.responses[q.idx]
+	q.idx++
+	return resp, nil
 }
 
 // --- helpers ---
@@ -66,11 +80,17 @@ func writePromptTemplate(t *testing.T) string {
 
 func testConsolidator(t *testing.T, store db.Store, resp *provider.Response, sendErr error) *Consolidator {
 	t.Helper()
+	return testConsolidatorWithThreshold(t, store, resp, sendErr, 0.40)
+}
+
+func testConsolidatorWithThreshold(t *testing.T, store db.Store, resp *provider.Response, sendErr error, threshold float64) *Consolidator {
+	t.Helper()
 	c, err := New(
 		&mockSender{response: resp, err: sendErr},
 		store,
 		writePromptTemplate(t),
 		config.DefaultTypes(),
+		threshold,
 		slog.Default(),
 	)
 	if err != nil {
@@ -116,18 +136,18 @@ func TestConsolidate_FindsConnections(t *testing.T) {
 		TokensUsed:   200,
 	}, nil)
 
-	result, err := c.Consolidate(context.Background(), 10)
+	results, err := c.Consolidate(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
 	}
-	if len(result.FactConnections) != 1 {
-		t.Fatalf("expected 1 connection, got %d", len(result.FactConnections))
+	if len(results[0].FactConnections) != 1 {
+		t.Fatalf("expected 1 connection, got %d", len(results[0].FactConnections))
 	}
 
-	fc := result.FactConnections[0]
+	fc := results[0].FactConnections[0]
 	if fc.FactA != facts[0].ID {
 		t.Errorf("expected fact_a %q, got %q", facts[0].ID, fc.FactA)
 	}
@@ -153,15 +173,15 @@ func TestConsolidate_GeneratesInsight(t *testing.T) {
 		TokensUsed:   200,
 	}, nil)
 
-	result, err := c.Consolidate(context.Background(), 10)
+	results, err := c.Consolidate(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result == nil {
-		t.Fatal("expected non-nil result")
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
 	}
 
-	cons := result.Consolidation
+	cons := results[0].Consolidation
 	if cons.Summary == "" {
 		t.Error("expected non-empty summary")
 	}
@@ -191,12 +211,12 @@ func TestConsolidate_HandlesEmptyDB(t *testing.T) {
 		Model:        "test-model",
 	}, nil)
 
-	result, err := c.Consolidate(context.Background(), 10)
+	results, err := c.Consolidate(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != nil {
-		t.Errorf("expected nil result for empty DB, got %+v", result)
+	if len(results) != 0 {
+		t.Errorf("expected empty results for empty DB, got %d", len(results))
 	}
 }
 
@@ -245,9 +265,12 @@ func TestConsolidate_StoresResults(t *testing.T) {
 		TokensUsed:   200,
 	}, nil)
 
-	result, err := c.Consolidate(context.Background(), 10)
+	results, err := c.Consolidate(context.Background(), 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
 	}
 
 	// Verify consolidation is in DB
@@ -258,8 +281,8 @@ func TestConsolidate_StoresResults(t *testing.T) {
 	if len(cons) != 1 {
 		t.Fatalf("expected 1 consolidation in DB, got %d", len(cons))
 	}
-	if cons[0].ID != result.Consolidation.ID {
-		t.Errorf("consolidation ID mismatch: DB %q vs result %q", cons[0].ID, result.Consolidation.ID)
+	if cons[0].ID != results[0].Consolidation.ID {
+		t.Errorf("consolidation ID mismatch: DB %q vs result %q", cons[0].ID, results[0].Consolidation.ID)
 	}
 	if cons[0].Summary != "Both facts relate to decisions about the Acme project." {
 		t.Errorf("unexpected summary in DB: %q", cons[0].Summary)
@@ -273,7 +296,7 @@ func TestConsolidate_StoresResults(t *testing.T) {
 	if len(fcs) != 1 {
 		t.Fatalf("expected 1 fact connection in DB, got %d", len(fcs))
 	}
-	if fcs[0].ConsolidationID != result.Consolidation.ID {
+	if fcs[0].ConsolidationID != results[0].Consolidation.ID {
 		t.Errorf("fact connection consolidation_id mismatch")
 	}
 
@@ -284,5 +307,158 @@ func TestConsolidate_StoresResults(t *testing.T) {
 	}
 	if len(unconsolidated) != 0 {
 		t.Errorf("expected 0 unconsolidated facts after consolidation, got %d", len(unconsolidated))
+	}
+}
+
+// --- clustering tests ---
+
+func TestClusterFacts_GroupsBySimilarity(t *testing.T) {
+	// Two similar vectors and one dissimilar; threshold 0.90 should group the pair.
+	facts := []model.Fact{
+		{ID: "a", Embedding: []float32{1, 0, 0}},
+		{ID: "b", Embedding: []float32{0.99, 0.1, 0}},
+		{ID: "c", Embedding: []float32{0, 0, 1}},
+	}
+	clusters := clusterFacts(facts, 0.90)
+	if len(clusters) != 1 {
+		t.Fatalf("expected 1 cluster (the similar pair), got %d", len(clusters))
+	}
+	if len(clusters[0]) != 2 {
+		t.Errorf("expected cluster of 2, got %d", len(clusters[0]))
+	}
+	ids := map[string]bool{clusters[0][0].ID: true, clusters[0][1].ID: true}
+	if !ids["a"] || !ids["b"] {
+		t.Errorf("expected cluster to contain a and b, got %v", ids)
+	}
+}
+
+func TestClusterFacts_SeparatesDissimilar(t *testing.T) {
+	// Four facts: two pairs of similar vectors, threshold 0.80.
+	facts := []model.Fact{
+		{ID: "a1", Embedding: []float32{1, 0, 0}},
+		{ID: "a2", Embedding: []float32{0.95, 0.1, 0}},
+		{ID: "b1", Embedding: []float32{0, 1, 0}},
+		{ID: "b2", Embedding: []float32{0, 0.95, 0.1}},
+	}
+	clusters := clusterFacts(facts, 0.80)
+	if len(clusters) != 2 {
+		t.Fatalf("expected 2 clusters, got %d", len(clusters))
+	}
+	for i, cl := range clusters {
+		if len(cl) != 2 {
+			t.Errorf("cluster %d: expected 2 facts, got %d", i, len(cl))
+		}
+	}
+}
+
+func TestClusterFacts_FallbackToSubject(t *testing.T) {
+	// No embeddings, but two facts share a subject.
+	facts := []model.Fact{
+		{ID: "a", Subject: "Acme"},
+		{ID: "b", Subject: "acme"},
+		{ID: "c", Subject: "Zeta"},
+	}
+	clusters := clusterFacts(facts, 0.40)
+	if len(clusters) != 1 {
+		t.Fatalf("expected 1 cluster (Acme pair), got %d", len(clusters))
+	}
+	if len(clusters[0]) != 2 {
+		t.Errorf("expected cluster of 2, got %d", len(clusters[0]))
+	}
+}
+
+func TestClusterFacts_SingleFactSkipped(t *testing.T) {
+	// Each fact is unique -- no cluster of >= 2 can form.
+	facts := []model.Fact{
+		{ID: "a", Embedding: []float32{1, 0, 0}},
+	}
+	clusters := clusterFacts(facts, 0.40)
+	if len(clusters) != 0 {
+		t.Errorf("expected 0 clusters for single fact, got %d", len(clusters))
+	}
+}
+
+func TestClusterFacts_EmptyInput(t *testing.T) {
+	clusters := clusterFacts(nil, 0.40)
+	if len(clusters) != 0 {
+		t.Errorf("expected 0 clusters for nil input, got %d", len(clusters))
+	}
+	clusters = clusterFacts([]model.Fact{}, 0.40)
+	if len(clusters) != 0 {
+		t.Errorf("expected 0 clusters for empty input, got %d", len(clusters))
+	}
+}
+
+func TestConsolidate_MultipleGroups(t *testing.T) {
+	store := testStore(t)
+	now := time.Now()
+
+	// Create two pairs of facts with similar embeddings, dissimilar between pairs.
+	factsData := []model.Fact{
+		{ID: db.NewID(), Source: model.Source{TranscriptFile: "t.md"}, FactType: model.FactDecision, Subject: "X", Content: "X1", Confidence: 0.9, CreatedAt: now, Embedding: []float32{1, 0, 0}},
+		{ID: db.NewID(), Source: model.Source{TranscriptFile: "t.md"}, FactType: model.FactDecision, Subject: "X", Content: "X2", Confidence: 0.9, CreatedAt: now.Add(time.Second), Embedding: []float32{0.99, 0.05, 0}},
+		{ID: db.NewID(), Source: model.Source{TranscriptFile: "t.md"}, FactType: model.FactDecision, Subject: "Y", Content: "Y1", Confidence: 0.9, CreatedAt: now.Add(2 * time.Second), Embedding: []float32{0, 1, 0}},
+		{ID: db.NewID(), Source: model.Source{TranscriptFile: "t.md"}, FactType: model.FactDecision, Subject: "Y", Content: "Y2", Confidence: 0.9, CreatedAt: now.Add(3 * time.Second), Embedding: []float32{0, 0.99, 0.05}},
+	}
+	for i := range factsData {
+		if err := store.CreateFact(context.Background(), &factsData[i]); err != nil {
+			t.Fatalf("seed fact: %v", err)
+		}
+	}
+
+	qs := &queueSender{responses: []*provider.Response{
+		{Content: validConsolidationJSON([]string{factsData[0].ID, factsData[1].ID}), ProviderName: "mock", Model: "m", TokensUsed: 100},
+		{Content: validConsolidationJSON([]string{factsData[2].ID, factsData[3].ID}), ProviderName: "mock", Model: "m", TokensUsed: 100},
+	}}
+
+	c, err := New(qs, store, writePromptTemplate(t), config.DefaultTypes(), 0.80, slog.Default())
+	if err != nil {
+		t.Fatalf("create consolidator: %v", err)
+	}
+
+	results, err := c.Consolidate(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results (one per cluster), got %d", len(results))
+	}
+	if qs.idx != 2 {
+		t.Errorf("expected sender called 2 times, got %d", qs.idx)
+	}
+}
+
+func TestConsolidate_NoEmbeddings_SubjectFallback(t *testing.T) {
+	store := testStore(t)
+	now := time.Now()
+
+	// Three facts, two share subject "Acme", one is "Zeta" (alone).
+	factsData := []model.Fact{
+		{ID: db.NewID(), Source: model.Source{TranscriptFile: "t.md"}, FactType: model.FactDecision, Subject: "Acme", Content: "A1", Confidence: 0.9, CreatedAt: now},
+		{ID: db.NewID(), Source: model.Source{TranscriptFile: "t.md"}, FactType: model.FactDecision, Subject: "Acme", Content: "A2", Confidence: 0.9, CreatedAt: now.Add(time.Second)},
+		{ID: db.NewID(), Source: model.Source{TranscriptFile: "t.md"}, FactType: model.FactDecision, Subject: "Zeta", Content: "Z1", Confidence: 0.9, CreatedAt: now.Add(2 * time.Second)},
+	}
+	for i := range factsData {
+		if err := store.CreateFact(context.Background(), &factsData[i]); err != nil {
+			t.Fatalf("seed fact: %v", err)
+		}
+	}
+
+	c := testConsolidator(t, store, &provider.Response{
+		Content:      validConsolidationJSON([]string{factsData[0].ID, factsData[1].ID}),
+		ProviderName: "mock",
+		Model:        "test-model",
+		TokensUsed:   100,
+	}, nil)
+
+	results, err := c.Consolidate(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result (Acme cluster), got %d", len(results))
+	}
+	if len(results[0].Consolidation.SourceFactIDs) != 2 {
+		t.Errorf("expected 2 source facts in cluster, got %d", len(results[0].Consolidation.SourceFactIDs))
 	}
 }

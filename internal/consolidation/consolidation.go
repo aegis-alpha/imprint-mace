@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"text/template"
@@ -28,15 +29,18 @@ type Sender interface {
 // Consolidator queries unconsolidated facts, sends them to an LLM for
 // grouping and insight generation, and stores the results.
 type Consolidator struct {
-	sender Sender
-	store  db.Store
-	prompt string
-	logger *slog.Logger
+	sender           Sender
+	store            db.Store
+	prompt           string
+	clusterThreshold float64
+	logger           *slog.Logger
 }
 
 // New creates a Consolidator. It reads the prompt template from disk and
 // renders it with the given types (connection types for consolidation).
-func New(sender Sender, store db.Store, templatePath string, types config.TypesConfig, logger *slog.Logger) (*Consolidator, error) {
+// clusterThreshold controls the cosine similarity threshold for grouping
+// facts into clusters before sending them to the LLM.
+func New(sender Sender, store db.Store, templatePath string, types config.TypesConfig, clusterThreshold float64, logger *slog.Logger) (*Consolidator, error) {
 	raw, err := os.ReadFile(templatePath)
 	if err != nil {
 		return nil, fmt.Errorf("read prompt template %s: %w", templatePath, err)
@@ -53,10 +57,11 @@ func New(sender Sender, store db.Store, templatePath string, types config.TypesC
 	}
 
 	return &Consolidator{
-		sender: sender,
-		store:  store,
-		prompt: buf.String(),
-		logger: logger,
+		sender:           sender,
+		store:            store,
+		prompt:           buf.String(),
+		clusterThreshold: clusterThreshold,
+		logger:           logger,
 	}, nil
 }
 
@@ -81,10 +86,10 @@ type ConsolidateResult struct {
 	FactConnections []model.FactConnection
 }
 
-// Consolidate fetches unconsolidated facts, sends them to the LLM,
-// and stores the resulting consolidation and fact connections.
-// Returns nil result (no error) when there are no facts to consolidate.
-func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*ConsolidateResult, error) {
+// Consolidate fetches unconsolidated facts, clusters them by similarity,
+// and sends each cluster to the LLM separately for consolidation.
+// Returns nil (no error) when there are no viable clusters to consolidate.
+func (c *Consolidator) Consolidate(ctx context.Context, limit int) ([]ConsolidateResult, error) {
 	facts, err := c.store.ListUnconsolidatedFacts(ctx, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list unconsolidated facts: %w", err)
@@ -94,6 +99,30 @@ func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*Consolidate
 		return nil, nil
 	}
 
+	clusters := clusterFacts(facts, c.clusterThreshold)
+	if len(clusters) == 0 {
+		c.logger.Info("consolidation skipped: no clusters with >= 2 facts")
+		return nil, nil
+	}
+
+	c.logger.Info("facts clustered for consolidation",
+		"total_facts", len(facts),
+		"clusters", len(clusters),
+	)
+
+	var results []ConsolidateResult
+	for i, cluster := range clusters {
+		result, err := c.consolidateCluster(ctx, cluster, i, len(clusters))
+		if err != nil {
+			return results, fmt.Errorf("cluster %d/%d: %w", i+1, len(clusters), err)
+		}
+		results = append(results, *result)
+	}
+
+	return results, nil
+}
+
+func (c *Consolidator) consolidateCluster(ctx context.Context, facts []model.Fact, idx, total int) (*ConsolidateResult, error) {
 	userPrompt := formatFactsForLLM(facts)
 
 	start := time.Now()
@@ -105,6 +134,7 @@ func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*Consolidate
 	if err != nil {
 		duration := time.Since(start)
 		c.logger.Error("consolidation provider failed",
+			"cluster", fmt.Sprintf("%d/%d", idx+1, total),
 			"duration_ms", duration.Milliseconds(),
 			"fact_count", len(facts),
 			"error", err,
@@ -118,6 +148,7 @@ func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*Consolidate
 	var raw rawConsolidationResult
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
 		c.logger.Error("consolidation JSON parse failed",
+			"cluster", fmt.Sprintf("%d/%d", idx+1, total),
 			"provider", resp.ProviderName,
 			"model", resp.Model,
 			"duration_ms", duration.Milliseconds(),
@@ -166,7 +197,8 @@ func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*Consolidate
 		fcs = append(fcs, fc)
 	}
 
-	c.logger.Info("consolidation complete",
+	c.logger.Info("cluster consolidation complete",
+		"cluster", fmt.Sprintf("%d/%d", idx+1, total),
 		"provider", resp.ProviderName,
 		"model", resp.Model,
 		"duration_ms", duration.Milliseconds(),
@@ -180,6 +212,85 @@ func (c *Consolidator) Consolidate(ctx context.Context, limit int) (*Consolidate
 		Consolidation:   cons,
 		FactConnections: fcs,
 	}, nil
+}
+
+// clusterFacts groups facts by cosine similarity of their embeddings.
+// Facts without embeddings fall back to case-insensitive subject grouping.
+// Remaining ungrouped facts go into a misc cluster.
+// Clusters with fewer than 2 facts are dropped.
+func clusterFacts(facts []model.Fact, threshold float64) [][]model.Fact {
+	var withEmb, withoutEmb []model.Fact
+	for i := range facts {
+		if len(facts[i].Embedding) > 0 {
+			withEmb = append(withEmb, facts[i])
+		} else {
+			withoutEmb = append(withoutEmb, facts[i])
+		}
+	}
+
+	var clusters [][]model.Fact
+
+	assigned := make([]bool, len(withEmb))
+	for i := range withEmb {
+		if assigned[i] {
+			continue
+		}
+		cluster := []model.Fact{withEmb[i]}
+		assigned[i] = true
+		for j := i + 1; j < len(withEmb); j++ {
+			if assigned[j] {
+				continue
+			}
+			if cosineSimilarity(withEmb[i].Embedding, withEmb[j].Embedding) >= threshold {
+				cluster = append(cluster, withEmb[j])
+				assigned[j] = true
+			}
+		}
+		if len(cluster) >= 2 {
+			clusters = append(clusters, cluster)
+		}
+	}
+
+	subjectGroups := make(map[string][]model.Fact)
+	var noSubject []model.Fact
+	for i := range withoutEmb {
+		subj := strings.TrimSpace(strings.ToLower(withoutEmb[i].Subject))
+		if subj == "" {
+			noSubject = append(noSubject, withoutEmb[i])
+		} else {
+			subjectGroups[subj] = append(subjectGroups[subj], withoutEmb[i])
+		}
+	}
+	for _, group := range subjectGroups {
+		if len(group) >= 2 {
+			clusters = append(clusters, group)
+		} else {
+			noSubject = append(noSubject, group...)
+		}
+	}
+
+	if len(noSubject) >= 2 {
+		clusters = append(clusters, noSubject)
+	}
+
+	return clusters
+}
+
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	denom := math.Sqrt(normA) * math.Sqrt(normB)
+	if denom == 0 {
+		return 0
+	}
+	return dot / denom
 }
 
 func formatFactsForLLM(facts []model.Fact) string {

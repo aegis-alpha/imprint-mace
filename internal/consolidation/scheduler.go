@@ -10,7 +10,7 @@ import (
 
 // Runner can execute a consolidation pass. Consolidator implements this.
 type Runner interface {
-	Consolidate(ctx context.Context, limit int) (*ConsolidateResult, error)
+	Consolidate(ctx context.Context, limit int) ([]ConsolidateResult, error)
 }
 
 // Scheduler runs consolidation at a configurable interval in a
@@ -77,14 +77,19 @@ func (s *Scheduler) tick(ctx context.Context) {
 		"unconsolidated", len(facts),
 	)
 
-	result, err := s.runner.Consolidate(ctx, s.maxGroup)
+	results, err := s.runner.Consolidate(ctx, s.maxGroup)
 	if err != nil {
 		s.logger.Error("scheduler: consolidation failed", "error", err)
 		return
 	}
-	if result != nil {
+	if len(results) > 0 {
+		totalConns := 0
+		for i := range results {
+			totalConns += len(results[i].FactConnections)
+		}
 		s.logger.Info("scheduler: consolidation complete",
-			"connections", len(result.FactConnections),
+			"clusters", len(results),
+			"connections", totalConns,
 		)
 	}
 }
