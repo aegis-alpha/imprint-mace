@@ -141,10 +141,11 @@ type FactUpdate struct {
 }
 
 type FactFilter struct {
-	FactType     string
-	Subject      string
+	FactType      string
+	Subject       string
 	NotSuperseded bool
-	Limit        int
+	CreatedAfter  *time.Time
+	Limit         int
 }
 
 type EntityFilter struct {

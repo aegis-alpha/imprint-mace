@@ -2,10 +2,12 @@
 [![Agent](https://img.shields.io/badge/Agent-Claude_Code-blue)]()
 [![Agent](https://img.shields.io/badge/Agent-OpenClaw-orange)]()
 [![Agent](https://img.shields.io/badge/Agent-Cursor-black)]()
+[![Agent](https://img.shields.io/badge/Agent-Gemini_CLI-4285F4)]()
 [![Agent](https://img.shields.io/badge/Agent-Craft_Agents-grey)]()
 [![Channel](https://img.shields.io/badge/MCP-red)]()
 [![Channel](https://img.shields.io/badge/API-blue)]()
 [![License](https://img.shields.io/badge/Open_Source-MIT-green)](https://github.com/aegis-alpha/imprint-mace/blob/main/LICENSE)
+[![Changelog](https://img.shields.io/badge/CHANGELOG-green)](https://github.com/aegis-alpha/imprint-mace/blob/main/CHANGELOG.md)
 
 
 
@@ -14,8 +16,9 @@
 
 Memory And Context Engine (MACE) for AI agents. Imprint turns conversations into a structured knowledge graph and uses it to form the agent's working context -- what it knows, what was decided, what matters right now. Cursor, Claude Code, any MCP client. Single Go binary, single SQLite file.
 
-> **Status: Experimental (v0.1.x)**
+> **Status: Experimental (see badge for version)**
 > Imprint is functional and deployed, but the API, MCP tools, config format, and database schema may change between versions. 241 tests pass, dual-layer memory works for OpenClaw, but multi-platform integration and production hardening are in progress. Feedback and contributions welcome.
+
 
 ## The Problem
 
@@ -267,6 +270,19 @@ To override (e.g. remote server), set `IMPRINT_URL` in the hook's env config:
 
 Both hooks listen for `message:preprocessed` events and use `bodyForAgent` (enriched body after media/link understanding), falling back to `body`.
 
+## Platform Integrations
+
+Each platform integration provides three layers: a **hook** for deterministic context injection at session start, an **MCP server** for on-demand tool access, and a **rules file** for agent behavior guidance.
+
+| Platform | Hook | MCP | Rules | Setup |
+|----------|------|-----|-------|-------|
+| OpenClaw | 3 hooks (ingest, query, transcript) | Yes | AGENTS.md + TOOLS.md | [integrations/openclaw/](integrations/openclaw/) |
+| Cursor | sessionStart hook | Yes | SKILL.md | [integrations/cursor/](integrations/cursor/) |
+| Claude Code | SessionStart hook | Yes | AGENTS.md (for CLAUDE.md) | [integrations/claude-code/](integrations/claude-code/) |
+| Gemini CLI | SessionStart hook | Yes | GEMINI.md | [integrations/gemini-cli/](integrations/gemini-cli/) |
+
+All hooks call `GET /context` on the Imprint HTTP API (retrieval-only, no LLM synthesis, 50-200ms). Agents that need full LLM-synthesized answers use the `imprint_query` MCP tool directly.
+
 ## Data Model
 
 Imprint extracts three core structures from conversations:
@@ -415,7 +431,7 @@ The entire cycle is autonomous. No human intervention needed, though all proposa
 - ReadContext: load surrounding lines from transcript files on disk to enrich query answers
 - Query layer: hybrid retrieval across 5 parallel layers (vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph traversal), Reciprocal Rank Fusion merge, ReadContext enrichment, LLM synthesis with citations
 - MCP server (stdio transport, 7 tools) for Cursor, Claude Code, and other MCP-compatible agents
-- HTTP API: 8 REST endpoints (POST /ingest, GET /query, GET /status, GET /entities, GET /facts, GET /graph/{id}, PATCH /facts/{id}, POST /facts/{id}/supersede)
+- HTTP API: 9 REST endpoints (POST /ingest, GET /query, GET /context, GET /status, GET /entities, GET /facts, GET /graph/{id}, PATCH /facts/{id}, POST /facts/{id}/supersede)
 - Platform adapters: Cursor, Claude Code, OpenClaw (Python scripts in integrations/{platform}/adapter/)
 - OpenClaw hooks: deterministic integration via message:preprocessed hooks (imprint-ingest for realtime knowledge extraction, imprint-query for automatic context retrieval)
 - Self-editing memory: agents can update fact metadata or supersede facts with corrected content

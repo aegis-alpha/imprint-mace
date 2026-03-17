@@ -1,12 +1,13 @@
-// Package api provides an HTTP REST API for OpenClaw-Memory.
+// Package api provides an HTTP REST API for Imprint.
 //
 // Endpoints:
-//   - POST /ingest         -- extract facts from text
-//   - GET  /query?q=...    -- ask a question
-//   - GET  /status         -- database statistics
-//   - GET  /entities       -- list entities (?type=, ?limit=)
-//   - GET  /facts          -- list facts (?type=, ?subject=, ?limit=)
-//   - GET  /graph/{id}     -- entity subgraph (?depth=)
+//   - POST /ingest           -- extract facts from text
+//   - GET  /query?q=...      -- ask a question (LLM synthesis)
+//   - GET  /context?hint=... -- retrieval-only context (no LLM)
+//   - GET  /status           -- database statistics
+//   - GET  /entities         -- list entities (?type=, ?limit=)
+//   - GET  /facts            -- list facts (?type=, ?subject=, ?limit=)
+//   - GET  /graph/{id}       -- entity subgraph (?depth=)
 package api
 
 import (
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
@@ -27,16 +29,22 @@ type Handler struct {
 	engine  *imprint.Engine
 	store   db.Store
 	querier *query.Querier
+	builder *impctx.Builder
 	logger  *slog.Logger
 	version string
 	mux     *http.ServeMux
 }
 
 func NewHandler(engine *imprint.Engine, store db.Store, querier *query.Querier, version string, logger *slog.Logger) *Handler {
+	return NewHandlerWithBuilder(engine, store, querier, nil, version, logger)
+}
+
+func NewHandlerWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Querier, builder *impctx.Builder, version string, logger *slog.Logger) *Handler {
 	h := &Handler{
 		engine:  engine,
 		store:   store,
 		querier: querier,
+		builder: builder,
 		logger:  logger,
 		version: version,
 		mux:     http.NewServeMux(),
@@ -48,6 +56,9 @@ func NewHandler(engine *imprint.Engine, store db.Store, querier *query.Querier, 
 	h.mux.HandleFunc("/query", h.methodGET(h.handleQuery))
 	h.mux.HandleFunc("/ingest", h.methodPOST(h.handleIngest))
 	h.mux.HandleFunc("/facts/", h.handleFactsRoute)
+	if builder != nil {
+		h.mux.HandleFunc("/context", h.methodGET(h.handleContext))
+	}
 	return h
 }
 
@@ -185,6 +196,19 @@ func (h *Handler) handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) handleContext(w http.ResponseWriter, r *http.Request) {
+	hint := r.URL.Query().Get("hint")
+	text, err := h.builder.Build(r.Context(), hint)
+	if err != nil {
+		h.logger.Error("context build failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "context build failed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(text))
 }
 
 type ingestRequest struct {

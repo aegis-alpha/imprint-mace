@@ -1743,3 +1743,34 @@ func TestListFactEmbeddings_NoFacts(t *testing.T) {
 		t.Errorf("expected 0 vectors, got %d", len(vecs))
 	}
 }
+
+// --- CreatedAfter filter ---
+
+func TestListFacts_CreatedAfter(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	old := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+	recent := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
+
+	store.CreateFact(ctx, &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "t.md"},
+		FactType: model.FactDecision, Content: "old decision", CreatedAt: old,
+	})
+	store.CreateFact(ctx, &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "t.md"},
+		FactType: model.FactPreference, Content: "recent preference", CreatedAt: recent,
+	})
+
+	cutoff := time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC)
+	facts, err := store.ListFacts(ctx, FactFilter{CreatedAfter: &cutoff})
+	if err != nil {
+		t.Fatalf("ListFacts with CreatedAfter: %v", err)
+	}
+	if len(facts) != 1 {
+		t.Fatalf("expected 1 fact after cutoff, got %d", len(facts))
+	}
+	if facts[0].Content != "recent preference" {
+		t.Errorf("expected recent fact, got %q", facts[0].Content)
+	}
+}

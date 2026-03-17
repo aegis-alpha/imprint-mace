@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": ".claude/hooks/imprint-context.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}

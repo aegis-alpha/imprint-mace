@@ -7,11 +7,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/aegis-alpha/imprint-mace/internal/config"
+	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/extraction"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
@@ -511,5 +514,152 @@ func TestQueryTool_MissingQuestion(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error result for missing question")
+	}
+}
+
+// --- MCP Resources ---
+
+func testStoreWithBuilder(t *testing.T) (*Server, db.Store) {
+	t.Helper()
+	store, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := store.EnsureVecTable(context.Background(), 8); err != nil {
+		t.Fatalf("vec table: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	builder := impctx.New(store, nil, "", impctx.BuilderConfig{
+		RecentHours: 24, MaxFacts: 20, IncludePreferences: true,
+	}, slog.Default())
+
+	srv := NewWithBuilder(nil, store, nil, builder, "test", slog.Default())
+	return srv, store
+}
+
+func TestResource_Relevant(t *testing.T) {
+	srv, store := testStoreWithBuilder(t)
+	ctx := context.Background()
+
+	store.CreateFact(ctx, &model.Fact{
+		ID: "rf-001", FactType: model.FactPreference, Subject: "Alice",
+		Content: "Alice prefers dark mode", Confidence: 0.9,
+		Source: model.Source{TranscriptFile: "t.md"},
+	})
+
+	req := mcplib.ReadResourceRequest{}
+	req.Params.URI = "imprint://context/relevant"
+
+	contents, err := srv.handleContextRelevant(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(contents) != 1 {
+		t.Fatalf("expected 1 content, got %d", len(contents))
+	}
+	tc, ok := contents[0].(mcplib.TextResourceContents)
+	if !ok {
+		t.Fatalf("expected TextResourceContents, got %T", contents[0])
+	}
+	if tc.Text == "" {
+		t.Error("expected non-empty text")
+	}
+}
+
+func TestResource_Preferences(t *testing.T) {
+	srv, store := testStoreWithBuilder(t)
+	ctx := context.Background()
+
+	store.CreateFact(ctx, &model.Fact{
+		ID: "pf-001", FactType: model.FactPreference, Subject: "Alice",
+		Content: "Alice prefers dark mode", Confidence: 0.9,
+		Source: model.Source{TranscriptFile: "t.md"},
+	})
+	store.CreateFact(ctx, &model.Fact{
+		ID: "pf-002", FactType: model.FactDecision, Subject: "Acme",
+		Content: "Acme uses Go", Confidence: 0.9,
+		Source: model.Source{TranscriptFile: "t.md"},
+	})
+
+	req := mcplib.ReadResourceRequest{}
+	req.Params.URI = "imprint://context/preferences"
+
+	contents, err := srv.handleContextPreferences(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc := contents[0].(mcplib.TextResourceContents)
+	if !strings.Contains(tc.Text, "Alice prefers dark mode") {
+		t.Errorf("expected preference in output, got %q", tc.Text)
+	}
+	if strings.Contains(tc.Text, "Acme uses Go") {
+		t.Error("non-preference fact should not appear in preferences resource")
+	}
+}
+
+func TestResource_Recent(t *testing.T) {
+	srv, store := testStoreWithBuilder(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	store.CreateFact(ctx, &model.Fact{
+		ID: "rc-001", FactType: model.FactEvent, Subject: "node-1",
+		Content: "node-1 restarted", Confidence: 0.9,
+		Source: model.Source{TranscriptFile: "t.md"}, CreatedAt: now,
+	})
+
+	req := mcplib.ReadResourceRequest{}
+	req.Params.URI = "imprint://context/recent"
+
+	contents, err := srv.handleContextRecent(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc := contents[0].(mcplib.TextResourceContents)
+	if !strings.Contains(tc.Text, "node-1 restarted") {
+		t.Errorf("expected recent fact in output, got %q", tc.Text)
+	}
+}
+
+func TestResource_Entity(t *testing.T) {
+	srv, store := testStoreWithBuilder(t)
+	ctx := context.Background()
+
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e1", Name: "Alice", EntityType: model.EntityPerson,
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e2", Name: "Acme", EntityType: model.EntityProject,
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r1", FromEntity: "e1", ToEntity: "e2", RelationType: model.RelWorksOn,
+	})
+
+	req := mcplib.ReadResourceRequest{}
+	req.Params.URI = "imprint://context/entities/Alice"
+
+	contents, err := srv.handleContextEntity(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc := contents[0].(mcplib.TextResourceContents)
+	if !strings.Contains(tc.Text, "Alice") {
+		t.Errorf("expected entity name in output, got %q", tc.Text)
+	}
+	if !strings.Contains(tc.Text, "works_on") {
+		t.Errorf("expected relationship in output, got %q", tc.Text)
+	}
+}
+
+func TestResource_Entity_NotFound(t *testing.T) {
+	srv, _ := testStoreWithBuilder(t)
+
+	req := mcplib.ReadResourceRequest{}
+	req.Params.URI = "imprint://context/entities/NonExistent"
+
+	_, err := srv.handleContextEntity(context.Background(), req)
+	if err == nil {
+		t.Error("expected error for non-existent entity")
 	}
 }

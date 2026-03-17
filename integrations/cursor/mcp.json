@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "imprint": {
+      "command": "imprint",
+      "args": ["mcp"],
+      "env": {
+        "IMPRINT_CONFIG": "/path/to/config.toml"
+      }
+    }
+  }
+}

@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0] - 2026-03-17
+
+### Added
+
+- GET /context HTTP endpoint: retrieval-only context (no LLM synthesis, 50-200ms) for hook integrations
+- Context builder package (internal/context/): vector search + FTS5 + preferences + recent facts, structured markdown output
+- MCP Resources: imprint://context/relevant, imprint://context/preferences, imprint://context/recent, imprint://context/entities/{name}
+- Cursor hook integration: sessionStart hook, hooks.json + mcp.json templates, README
+- Claude Code hook integration: SessionStart hook, settings.json + mcp.json templates, README
+- Gemini CLI hook integration: SessionStart hook, settings.json template, GEMINI.md rules file, README
+- Consolidation pre-clustering: group facts by embedding similarity before LLM call (BVP-229)
+- Config: [context] section (recent_hours, max_facts, include_preferences) with defaults
+- Config: [consolidation] pre_cluster, similarity_threshold, max_cluster_size settings
+- CLI: `imprint context [HINT]` subcommand for hook integration
+- DB: FactFilter.CreatedAfter for time-based fact queries
+
+### Fixed
+
+- Config: include_preferences=false was ignored when no other context fields were set
+
 ## [0.2.0] - 2026-03-17
 
 ### Added
@@ -69,5 +89,6 @@ Initial release.
 - CI: GitHub Actions (test on Ubuntu + macOS, Docker build on main, goreleaser on tag)
 - 232+ tests
 
+[0.3.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.3.0
 [0.2.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.1.0

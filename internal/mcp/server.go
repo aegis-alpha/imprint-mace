@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
@@ -20,22 +22,35 @@ type Server struct {
 	engine  *imprint.Engine
 	store   db.Store
 	querier *query.Querier
+	builder *impctx.Builder
 	logger  *slog.Logger
 	mcp     *server.MCPServer
 }
 
 func New(engine *imprint.Engine, store db.Store, querier *query.Querier, version string, logger *slog.Logger) *Server {
+	return NewWithBuilder(engine, store, querier, nil, version, logger)
+}
+
+func NewWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Querier, builder *impctx.Builder, version string, logger *slog.Logger) *Server {
 	s := &Server{
 		engine:  engine,
 		store:   store,
 		querier: querier,
+		builder: builder,
 		logger:  logger,
+	}
+
+	opts := []server.ServerOption{
+		server.WithToolCapabilities(false),
+	}
+	if builder != nil {
+		opts = append(opts, server.WithResourceCapabilities(false, true))
 	}
 
 	s.mcp = server.NewMCPServer(
 		"imprint",
 		version,
-		server.WithToolCapabilities(false),
+		opts...,
 	)
 
 	s.mcp.AddTool(
@@ -119,6 +134,37 @@ func New(engine *imprint.Engine, store db.Store, querier *query.Querier, version
 		),
 		s.handleSupersedeFact,
 	)
+
+	if builder != nil {
+		s.mcp.AddResource(
+			mcp.NewResource("imprint://context/relevant", "Relevant Context",
+				mcp.WithResourceDescription("Relevant facts, preferences, and recent knowledge"),
+				mcp.WithMIMEType("text/plain"),
+			),
+			s.handleContextRelevant,
+		)
+		s.mcp.AddResource(
+			mcp.NewResource("imprint://context/preferences", "User Preferences",
+				mcp.WithResourceDescription("All stored user preferences"),
+				mcp.WithMIMEType("text/plain"),
+			),
+			s.handleContextPreferences,
+		)
+		s.mcp.AddResource(
+			mcp.NewResource("imprint://context/recent", "Recent Facts",
+				mcp.WithResourceDescription("Facts created in the last N hours"),
+				mcp.WithMIMEType("text/plain"),
+			),
+			s.handleContextRecent,
+		)
+		s.mcp.AddResourceTemplate(
+			mcp.NewResourceTemplate("imprint://context/entities/{name}", "Entity Context",
+				mcp.WithTemplateDescription("Context about a specific entity"),
+				mcp.WithTemplateMIMEType("text/plain"),
+			),
+			s.handleContextEntity,
+		)
+	}
 
 	return s
 }
@@ -287,4 +333,111 @@ func (s *Server) handleSupersedeFact(ctx context.Context, req mcp.CallToolReques
 
 	data, _ := json.Marshal(newFact)
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+// --- MCP Resource handlers ---
+
+func (s *Server) handleContextRelevant(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	text, err := s.builder.Build(ctx, "")
+	if err != nil {
+		return nil, fmt.Errorf("build context: %w", err)
+	}
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      "imprint://context/relevant",
+			MIMEType: "text/plain",
+			Text:     text,
+		},
+	}, nil
+}
+
+func (s *Server) handleContextPreferences(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	prefs, err := s.store.ListFacts(ctx, db.FactFilter{FactType: "preference"})
+	if err != nil {
+		return nil, fmt.Errorf("list preferences: %w", err)
+	}
+	var lines []string
+	for _, f := range prefs {
+		lines = append(lines, fmt.Sprintf("- %s: %s", f.Subject, f.Content))
+	}
+	text := strings.Join(lines, "\n")
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      "imprint://context/preferences",
+			MIMEType: "text/plain",
+			Text:     text,
+		},
+	}, nil
+}
+
+func (s *Server) handleContextRecent(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	cutoff := time.Now().UTC().Add(-24 * time.Hour)
+	facts, err := s.store.ListFacts(ctx, db.FactFilter{CreatedAfter: &cutoff})
+	if err != nil {
+		return nil, fmt.Errorf("list recent facts: %w", err)
+	}
+	var lines []string
+	for _, f := range facts {
+		date := f.CreatedAt.Format("2006-01-02 15:04")
+		lines = append(lines, fmt.Sprintf("- [%s] %s: %s (%s)", f.FactType, f.Subject, f.Content, date))
+	}
+	text := strings.Join(lines, "\n")
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      "imprint://context/recent",
+			MIMEType: "text/plain",
+			Text:     text,
+		},
+	}, nil
+}
+
+func (s *Server) handleContextEntity(ctx context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+	uri := req.Params.URI
+	prefix := "imprint://context/entities/"
+	if !strings.HasPrefix(uri, prefix) {
+		return nil, fmt.Errorf("invalid entity resource URI: %s", uri)
+	}
+	name := strings.TrimPrefix(uri, prefix)
+	if name == "" {
+		return nil, fmt.Errorf("entity name is required")
+	}
+
+	entity, err := s.store.GetEntityByName(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("entity %q not found: %w", name, err)
+	}
+
+	graph, err := s.store.GetEntityGraph(ctx, entity.ID, 2)
+	if err != nil {
+		return nil, fmt.Errorf("entity graph: %w", err)
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("# %s (%s)", entity.Name, entity.EntityType))
+	if len(entity.Aliases) > 0 {
+		lines = append(lines, fmt.Sprintf("Aliases: %s", strings.Join(entity.Aliases, ", ")))
+	}
+	lines = append(lines, "")
+
+	if len(graph.Relationships) > 0 {
+		lines = append(lines, "## Relationships")
+		entityNames := map[string]string{}
+		for _, e := range graph.Entities {
+			entityNames[e.ID] = e.Name
+		}
+		for _, r := range graph.Relationships {
+			from := entityNames[r.FromEntity]
+			to := entityNames[r.ToEntity]
+			lines = append(lines, fmt.Sprintf("- %s -[%s]-> %s", from, r.RelationType, to))
+		}
+	}
+
+	text := strings.Join(lines, "\n")
+	return []mcp.ResourceContents{
+		mcp.TextResourceContents{
+			URI:      uri,
+			MIMEType: "text/plain",
+			Text:     text,
+		},
+	}, nil
 }

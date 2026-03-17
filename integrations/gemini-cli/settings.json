@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "name": "imprint-context",
+            "type": "command",
+            "command": ".gemini/hooks/imprint-context.sh",
+            "timeout": 10000,
+            "description": "Inject Imprint memory context at session start"
+          }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "imprint": {
+      "command": "imprint",
+      "args": ["mcp"],
+      "trust": true
+    }
+  }
+}

@@ -81,6 +81,40 @@ Database statistics, wrapped with version info.
 }
 ```
 
+### GET /context
+
+Retrieve relevant context from the knowledge base without LLM synthesis. Returns structured text with preferences, recent facts, and (if a hint is provided) semantically relevant facts. Designed for hook integrations where fast, deterministic context injection is needed (50-200ms typical).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `hint` | string | no | Search hint for semantic relevance (e.g. user's message). If empty, returns only preferences and recent facts. |
+
+**Response (200):** `Content-Type: text/plain`
+
+```
+## Relevant Context
+- [decision] Acme: Decided to use Go for the Acme project (confidence=0.95, 2026-03-15)
+
+## Preferences
+- Alice: Prefers dark mode in all editors
+
+## Recent
+- [project] Acme: Acme uses SQLite for storage (2026-03-15)
+```
+
+Sections are omitted when empty. Returns an empty body (200) when no facts are found.
+
+**Comparison with GET /query:**
+
+| | GET /context | GET /query |
+|---|---|---|
+| LLM call | No | Yes |
+| Latency | 50-200ms | 5-30s |
+| Output | Structured text (sections) | Synthesized answer with citations |
+| Use case | Hook context injection | Agent tool (on-demand) |
+
+---
+
 ### GET /entities
 
 List entities, optionally filtered by type.

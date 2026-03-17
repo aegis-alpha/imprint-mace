@@ -165,6 +165,10 @@ func (s *SQLiteStore) ListFacts(ctx context.Context, filter FactFilter) ([]model
 	if filter.NotSuperseded {
 		q += " AND superseded_by IS NULL"
 	}
+	if filter.CreatedAfter != nil {
+		q += " AND created_at > ?"
+		args = append(args, filter.CreatedAfter.Format(time.RFC3339))
+	}
 	q += " ORDER BY created_at DESC"
 	if filter.Limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", filter.Limit)
