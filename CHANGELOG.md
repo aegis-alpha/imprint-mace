@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.0] - 2026-03-17
+
+### Added
+
+- Version update check: background check against GitHub Releases API (once/day, non-blocking)
+- CI pipeline: golangci-lint (8 linters), govulncheck, trufflehog secret scan, coverage reporting
+- Integration tests: full pipeline test with real LLM (build tag gated, runs on main only)
+- Pre-commit script: local lint + short tests
+- Dual-layer session supersede: realtime facts replaced when transcript is batch-ingested
+- Release script with conventional commits version bump detection
+- Docker advertise URL for service discovery
+- OpenClaw transcript hook for batch ingest path
+- OpenRouter provider support (extraction, embedding, query) -- 300+ models, 29 free
+- Voyage AI embedding provider -- 200M free tokens/year
+- OpenRouter app identification headers (HTTP-Referer, X-Title)
+
+### Fixed
+
+- 26 lint issues in existing code (TrimSuffix, rangeValCopy, ifElseChain, errcheck)
+- golangci-lint CI compatibility with Go 1.26.1 (action v7 + lint v2)
+- Integration test provider config (BaseURL required for OpenAI)
+- OpenClaw hooks: improved error handling, retry logic, timeout config
+
+### Changed
+
+- Platform files migrated to integrations/{platform}/ structure
+- OpenClaw hooks: URL discovery, reachability check, port fallback
+- Docs synced: README, API.md, ARCHITECTURE.md, TRANSCRIPT-FORMAT.md
+- 253+ tests (up from 232)
+
 ## [0.1.0] - 2026-03-15
 
 Initial release.
@@ -39,4 +69,5 @@ Initial release.
 - CI: GitHub Actions (test on Ubuntu + macOS, Docker build on main, goreleaser on tag)
 - 232+ tests
 
+[0.2.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.1.0
