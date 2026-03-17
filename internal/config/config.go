@@ -127,9 +127,9 @@ type PromptPaths struct {
 }
 
 type ContextConfig struct {
-	RecentHours        int  `toml:"recent_hours"`
-	MaxFacts           int  `toml:"max_facts"`
-	IncludePreferences bool `toml:"include_preferences"`
+	RecentHours        int   `toml:"recent_hours"`
+	MaxFacts           int   `toml:"max_facts"`
+	IncludePreferences *bool `toml:"include_preferences"`
 }
 
 func (c *Config) EffectiveContextConfig() ContextConfig {
@@ -142,13 +142,13 @@ func (c *Config) EffectiveContextConfig() ContextConfig {
 		maxFacts = 20
 	}
 	inclPrefs := true
-	if c.Context.RecentHours > 0 || c.Context.MaxFacts > 0 {
-		inclPrefs = c.Context.IncludePreferences
+	if c.Context.IncludePreferences != nil {
+		inclPrefs = *c.Context.IncludePreferences
 	}
 	return ContextConfig{
 		RecentHours:        hours,
 		MaxFacts:           maxFacts,
-		IncludePreferences: inclPrefs,
+		IncludePreferences: &inclPrefs,
 	}
 }
 

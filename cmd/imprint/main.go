@@ -266,7 +266,7 @@ func createBuilder(cfg *config.Config, store db.Store, logger *slog.Logger) *imp
 	return impctx.New(store, embedder, transcriptDir, impctx.BuilderConfig{
 		RecentHours:        ctxCfg.RecentHours,
 		MaxFacts:           ctxCfg.MaxFacts,
-		IncludePreferences: ctxCfg.IncludePreferences,
+		IncludePreferences: ctxCfg.IncludePreferences != nil && *ctxCfg.IncludePreferences,
 	}, logger)
 }
 

@@ -303,7 +303,7 @@ priority = 1
 	if eff.MaxFacts != 20 {
 		t.Errorf("expected default max_facts=20, got %d", eff.MaxFacts)
 	}
-	if !eff.IncludePreferences {
+	if eff.IncludePreferences == nil || !*eff.IncludePreferences {
 		t.Error("expected default include_preferences=true")
 	}
 }
@@ -335,8 +335,38 @@ include_preferences = false
 	if eff.MaxFacts != 50 {
 		t.Errorf("expected max_facts=50, got %d", eff.MaxFacts)
 	}
-	if eff.IncludePreferences {
+	if eff.IncludePreferences == nil || *eff.IncludePreferences {
 		t.Error("expected include_preferences=false")
+	}
+}
+
+func TestEffectiveContextConfig_OnlyIncludePreferencesFalse(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "KEY"
+timeout_seconds = 30
+priority = 1
+
+[context]
+include_preferences = false
+`
+	cfg := loadFromString(t, content)
+	eff := cfg.EffectiveContextConfig()
+
+	if eff.RecentHours != 24 {
+		t.Errorf("expected default recent_hours=24, got %d", eff.RecentHours)
+	}
+	if eff.MaxFacts != 20 {
+		t.Errorf("expected default max_facts=20, got %d", eff.MaxFacts)
+	}
+	if eff.IncludePreferences == nil || *eff.IncludePreferences {
+		t.Error("expected include_preferences=false even without other context fields")
 	}
 }
 
