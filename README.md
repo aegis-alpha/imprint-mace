@@ -236,8 +236,8 @@ OpenClaw integrates via hooks -- deterministic, fires on every message without r
 **Install hooks:**
 
 ```bash
-cp -r tools/hooks/openclaw/imprint-ingest ~/.openclaw/hooks/
-cp -r tools/hooks/openclaw/imprint-query ~/.openclaw/hooks/
+cp -r integrations/openclaw/hooks/imprint-ingest ~/.openclaw/hooks/
+cp -r integrations/openclaw/hooks/imprint-query ~/.openclaw/hooks/
 ```
 
 **Configure:**
@@ -382,14 +382,14 @@ The entire cycle is autonomous. No human intervention needed, though all proposa
 - Query layer: hybrid retrieval across 5 parallel layers (vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph traversal), Reciprocal Rank Fusion merge, ReadContext enrichment, LLM synthesis with citations
 - MCP server (stdio transport, 7 tools) for Cursor, Claude Code, and other MCP-compatible agents
 - HTTP API: 8 REST endpoints (POST /ingest, GET /query, GET /status, GET /entities, GET /facts, GET /graph/{id}, PATCH /facts/{id}, POST /facts/{id}/supersede)
-- Platform adapters: Cursor, Claude Code, OpenClaw (Python scripts in tools/adapters/)
+- Platform adapters: Cursor, Claude Code, OpenClaw (Python scripts in integrations/{platform}/adapter/)
 - OpenClaw hooks: deterministic integration via message:preprocessed hooks (imprint-ingest for realtime knowledge extraction, imprint-query for automatic context retrieval)
 - Self-editing memory: agents can update fact metadata or supersede facts with corrected content
 - Semantic dedup during ingest: cosine similarity check skips near-duplicate facts (configurable threshold)
 - Context TTL: context-type facts auto-expire after configurable days
 - GC: delete expired facts past a retention window
 - Export: dump entire knowledge base as JSON or CSV
-- Agent integration skills: Cursor (SKILL.md) and Claude Code (AGENTS.md)
+- Agent integration skills: Cursor (integrations/cursor/SKILL.md) and Claude Code (integrations/claude-code/AGENTS.md)
 - 11 CLI subcommands: `ingest`, `ingest-dir`, `watch`, `consolidate`, `status`, `embed-backfill`, `query`, `serve`, `mcp`, `export`, `gc`
 - 238 tests
 

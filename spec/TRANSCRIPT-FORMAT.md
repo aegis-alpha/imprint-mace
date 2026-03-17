@@ -2,7 +2,7 @@
 
 Standardized intermediate format for agent conversation transcripts. Platform adapters convert native JSONL to this format; Imprint reads one format.
 
-Frontmatter parser: `internal/transcript/frontmatter.go`. Platform adapters: `tools/adapters/` (cursor, claude-code, openclaw).
+Frontmatter parser: `internal/transcript/frontmatter.go`. Platform adapters: `integrations/{platform}/adapter/` (cursor, claude-code, openclaw).
 
 ---
 
@@ -293,7 +293,7 @@ Notes: Craft Agents uses the Claude Agent SDK, so the JSONL schema is identical 
 
 ### Adapter location
 
-Adapters live in `tools/adapters/`, outside Imprint's core packages. Each adapter is a standalone Python script. Naming: `<platform>-adapter`.
+Adapters live in `integrations/{platform}/adapter/`, outside Imprint's core packages. Each adapter is a standalone Python script. Naming: `<platform>-adapter`.
 
 Implemented adapters:
 

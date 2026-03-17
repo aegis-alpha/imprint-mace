@@ -15,7 +15,7 @@ function getAdapterPath(): string | null {
     return null;
   }
 
-  const relative = join(dirname(__dirname), "..", "adapters", "openclaw-adapter");
+  const relative = join(dirname(__dirname), "..", "adapter", "openclaw-adapter");
   if (existsSync(relative)) return relative;
 
   console.error(

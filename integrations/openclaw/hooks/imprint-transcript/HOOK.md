@@ -33,7 +33,7 @@ immediately without waiting for conversion to complete.
 ## Requirements
 
 - Python 3 (for the openclaw-adapter script)
-- The adapter script at `tools/adapters/openclaw-adapter` (relative to the hook)
+- The adapter script at `integrations/openclaw/adapter/openclaw-adapter` (relative to repo root)
   or at the path specified by `IMPRINT_ADAPTER_PATH`
 
 ## Configuration
@@ -46,7 +46,7 @@ immediately without waiting for conversion to complete.
 ## Installation
 
 ```bash
-cp -r tools/hooks/openclaw/imprint-transcript ~/.openclaw/hooks/
+cp -r integrations/openclaw/hooks/imprint-transcript ~/.openclaw/hooks/
 ```
 
 ## Session identity note
