@@ -1,16 +1,20 @@
 // Package api provides an HTTP REST API for Imprint.
 //
 // Endpoints:
-//   - POST /ingest           -- extract facts from text
-//   - GET  /query?q=...      -- ask a question (LLM synthesis)
-//   - GET  /context?hint=... -- retrieval-only context (no LLM)
-//   - GET  /status           -- database statistics
-//   - GET  /entities         -- list entities (?type=, ?limit=)
-//   - GET  /facts            -- list facts (?type=, ?subject=, ?limit=)
-//   - GET  /graph/{id}       -- entity subgraph (?depth=)
+//   - POST   /ingest                      -- extract facts from text
+//   - GET    /query?q=...                 -- ask a question (LLM synthesis)
+//   - GET    /context?hint=...            -- retrieval-only context (no LLM)
+//   - GET    /status                      -- database statistics
+//   - GET    /entities                    -- list entities (?type=, ?limit=)
+//   - GET    /facts                       -- list facts (?type=, ?subject=, ?limit=)
+//   - GET    /graph/{id}                  -- entity subgraph (?depth=)
+//   - POST   /admin/reset                 -- wipe DB and recreate schema
+//   - DELETE /admin/facts                 -- delete facts by source pattern
+//   - POST   /admin/deduplicate-entities  -- merge duplicate entities
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -59,6 +63,9 @@ func NewHandlerWithBuilder(engine *imprint.Engine, store db.Store, querier *quer
 	if builder != nil {
 		h.mux.HandleFunc("/context", h.methodGET(h.handleContext))
 	}
+	h.mux.HandleFunc("/admin/reset", h.methodPOST(h.handleAdminReset))
+	h.mux.HandleFunc("/admin/facts", h.methodDELETE(h.handleAdminDeleteFacts))
+	h.mux.HandleFunc("/admin/deduplicate-entities", h.methodPOST(h.handleAdminDedup))
 	return h
 }
 
@@ -79,6 +86,16 @@ func (h *Handler) methodGET(handler http.HandlerFunc) http.HandlerFunc {
 func (h *Handler) methodPOST(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		handler(w, r)
+	}
+}
+
+func (h *Handler) methodDELETE(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
@@ -255,6 +272,69 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errorResponse{Error: msg})
+}
+
+// --- Admin endpoints ---
+
+func (h *Handler) handleAdminReset(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Confirm-Reset") != "yes" {
+		writeError(w, http.StatusBadRequest, "missing X-Confirm-Reset: yes header")
+		return
+	}
+
+	if err := h.store.Reset(r.Context()); err != nil {
+		h.logger.Error("admin reset failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "reset failed: "+err.Error())
+		return
+	}
+
+	if sqlStore, ok := h.store.(interface {
+		EnsureVecTable(ctx context.Context, dims int) error
+		EnsureChunkVecTable(ctx context.Context, dims int) error
+	}); ok {
+		ctx := r.Context()
+		sqlStore.EnsureVecTable(ctx, 0)
+		sqlStore.EnsureChunkVecTable(ctx, 0)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "reset complete"})
+}
+
+type deleteFactsRequest struct {
+	SourcePattern string `json:"source_pattern"`
+}
+
+func (h *Handler) handleAdminDeleteFacts(w http.ResponseWriter, r *http.Request) {
+	var req deleteFactsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.SourcePattern == "" {
+		writeError(w, http.StatusBadRequest, "'source_pattern' field is required")
+		return
+	}
+
+	n, err := h.store.DeleteFactsBySourcePattern(r.Context(), req.SourcePattern)
+	if err != nil {
+		h.logger.Error("admin delete facts failed", "pattern", req.SourcePattern, "error", err)
+		writeError(w, http.StatusInternalServerError, "delete facts failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": n})
+}
+
+func (h *Handler) handleAdminDedup(w http.ResponseWriter, r *http.Request) {
+	groups, removed, err := h.store.DeduplicateEntities(r.Context())
+	if err != nil {
+		h.logger.Error("admin deduplicate failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "deduplicate failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{
+		"merged_groups":    groups,
+		"entities_removed": removed,
+	})
 }
 
 // handleFactsRoute dispatches /facts/{id} and /facts/{id}/supersede

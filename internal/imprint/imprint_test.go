@@ -339,6 +339,97 @@ func TestIngest_WithSessionID(t *testing.T) {
 	}
 }
 
+func TestIngest_EntityDedup(t *testing.T) {
+	aliceJSON := `{
+  "facts": [
+    {"fact_type": "bio", "subject": "Alice", "content": "Alice is an engineer.", "confidence": 0.9, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [
+    {"name": "Alice", "entity_type": "person", "aliases": []}
+  ],
+  "relationships": []
+}`
+	aliceWithRelJSON := `{
+  "facts": [
+    {"fact_type": "project", "subject": "Acme", "content": "Acme uses Go.", "confidence": 0.9, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [
+    {"name": "Alice", "entity_type": "person", "aliases": []},
+    {"name": "Acme", "entity_type": "project", "aliases": []}
+  ],
+  "relationships": [
+    {"from_entity": "Alice", "to_entity": "Acme", "relation_type": "works_on"}
+  ]
+}`
+
+	sender := &mockSender{}
+	eng, store := testEngine(t, sender)
+	ctx := context.Background()
+
+	sender.response = &provider.Response{
+		Content: aliceJSON, ProviderName: "mock", Model: "test", TokensUsed: 50,
+	}
+	r1, err := eng.Ingest(ctx, "Alice is an engineer.", "test.md")
+	if err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	if r1.EntitiesCount != 1 {
+		t.Fatalf("expected 1 entity on first ingest, got %d", r1.EntitiesCount)
+	}
+	firstAliceID := r1.EntityIDs[0]
+
+	sender.response = &provider.Response{
+		Content: aliceWithRelJSON, ProviderName: "mock", Model: "test", TokensUsed: 50,
+	}
+	r2, err := eng.Ingest(ctx, "Alice works on Acme which uses Go.", "test2.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if r2.EntitiesCount != 2 {
+		t.Errorf("expected 2 entities on second ingest (1 reused + 1 new), got %d", r2.EntitiesCount)
+	}
+
+	entities, err := store.ListEntities(ctx, db.EntityFilter{Limit: 100})
+	if err != nil {
+		t.Fatalf("list entities: %v", err)
+	}
+	aliceCount := 0
+	for _, e := range entities {
+		if strings.EqualFold(e.Name, "Alice") {
+			aliceCount++
+		}
+	}
+	if aliceCount != 1 {
+		t.Errorf("expected exactly 1 Alice entity in DB, got %d (total entities: %d)", aliceCount, len(entities))
+	}
+
+	var reusedAliceID string
+	for _, id := range r2.EntityIDs {
+		ent, err := store.GetEntity(ctx, id)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(ent.Name, "Alice") {
+			reusedAliceID = id
+			break
+		}
+	}
+	if reusedAliceID != firstAliceID {
+		t.Errorf("second ingest should reuse original Alice ID %s, got %s", firstAliceID, reusedAliceID)
+	}
+
+	rels, err := store.ListRelationships(ctx, db.RelFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("list relationships: %v", err)
+	}
+	if len(rels) != 1 {
+		t.Fatalf("expected 1 relationship, got %d", len(rels))
+	}
+	if rels[0].FromEntity != firstAliceID {
+		t.Errorf("relationship from_entity should be original Alice ID %s, got %s", firstAliceID, rels[0].FromEntity)
+	}
+}
+
 func TestIngest_DedupThresholdZero_Disabled(t *testing.T) {
 	vec := []float32{0.1, 0.2, 0.3, 0.4}
 	embedder := &mockEmbedder{vec: vec}

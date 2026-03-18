@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/db"
@@ -118,12 +119,21 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 
 	result := &IngestResult{}
 
+	nameToID := make(map[string]string, len(extracted.Entities))
 	for i := range extracted.Entities {
+		name := strings.TrimSpace(extracted.Entities[i].Name)
+		existing, err := e.store.GetEntityByName(ctx, name)
+		if err == nil && existing != nil {
+			nameToID[extracted.Entities[i].Name] = existing.ID
+			result.EntityIDs = append(result.EntityIDs, existing.ID)
+			continue
+		}
 		if err := e.store.CreateEntity(ctx, &extracted.Entities[i]); err != nil {
 			e.logger.Warn("failed to store entity",
 				"name", extracted.Entities[i].Name, "error", err)
 			continue
 		}
+		nameToID[extracted.Entities[i].Name] = extracted.Entities[i].ID
 		result.EntityIDs = append(result.EntityIDs, extracted.Entities[i].ID)
 	}
 	result.EntitiesCount = len(result.EntityIDs)
@@ -165,11 +175,6 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 		}
 	}
 	result.FactsCount = len(result.FactIDs)
-
-	nameToID := make(map[string]string, len(extracted.Entities))
-	for _, ent := range extracted.Entities {
-		nameToID[ent.Name] = ent.ID
-	}
 
 	for i := range extracted.Relationships {
 		r := &extracted.Relationships[i]

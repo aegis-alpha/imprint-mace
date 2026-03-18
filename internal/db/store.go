@@ -97,6 +97,11 @@ type Store interface {
 	// Retention / GC
 	DeleteExpiredFacts(ctx context.Context, olderThan time.Time) (int64, error)
 
+	// Admin
+	Reset(ctx context.Context) error
+	DeleteFactsBySourcePattern(ctx context.Context, pattern string) (int64, error)
+	DeduplicateEntities(ctx context.Context) (groups int, removed int, err error)
+
 	// Stats
 	Stats(ctx context.Context) (*DBStats, error)
 

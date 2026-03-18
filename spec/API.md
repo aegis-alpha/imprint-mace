@@ -404,3 +404,72 @@ imprint gc
 imprint version
 imprint --version
 ```
+
+---
+
+## 4. Admin API
+
+Destructive operations for data management. Available via HTTP only.
+
+### POST /admin/reset
+
+Wipe all data and recreate the database schema from scratch. This is destructive and irreversible.
+
+**Request:**
+
+- Header: `X-Confirm-Reset: yes` (required, prevents accidental calls)
+- No body
+
+**Response (200):**
+
+```json
+{"status": "reset complete"}
+```
+
+**Errors:**
+- 400: missing `X-Confirm-Reset: yes` header
+
+### DELETE /admin/facts
+
+Delete facts whose `source_file` matches a SQL LIKE pattern. Also removes corresponding FTS and vector entries.
+
+**Request:**
+
+```json
+{
+  "source_pattern": "realtime:agent:main:cron:%"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `source_pattern` | string | yes | SQL LIKE pattern matched against `source_file` column |
+
+**Response (200):**
+
+```json
+{"deleted": 142}
+```
+
+**Errors:**
+- 400: missing `source_pattern` or invalid JSON
+
+### POST /admin/deduplicate-entities
+
+Find entity names that appear more than once (case-insensitive comparison), keep the oldest record, and merge the rest. Relationships referencing removed entities are re-pointed to the kept entity.
+
+**Request:** No body.
+
+**Response (200):**
+
+```json
+{
+  "merged_groups": 7,
+  "entities_removed": 12
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `merged_groups` | int | Number of duplicate name groups found and merged |
+| `entities_removed` | int | Total entity records deleted (re-pointed first) |

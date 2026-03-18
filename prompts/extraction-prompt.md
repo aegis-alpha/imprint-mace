@@ -91,6 +91,7 @@ Calibration: most facts should fall in the 0.5-0.85 range. A confidence of 0.9+ 
 8. Do not invent information. Extract only what is stated or directly implied.
 9. Do not duplicate. If the same fact appears multiple times, extract it once with higher confidence.
 10. Prefer fewer high-quality facts over many low-quality ones.
+11. Do not extract error messages, failure reports, or system inability statements as facts. "I cannot read file X", "The assistant could not access Y", "File not found" -- these are transient operational failures, not knowledge. Return empty arrays for such content.
 
 ## Examples
 
@@ -284,6 +285,18 @@ Alice: I think Bob mentioned something about switching to Kubernetes, but I'm no
 Alice: ok sounds good, let me check
 Assistant: Sure, take your time.
 Alice: alright, back. Where were we?
+```
+
+**Output:**
+```json
+{"facts": [], "entities": [], "relationships": []}
+```
+
+### Example 6: Operational noise -- no extractable knowledge
+
+**Input:**
+```
+Assistant: I cannot read /home/ubuntu/clawd/HEARTBEAT.md because I do not have access to the workspace files from this execution environment. Since I cannot determine whether anything needs attention, I'll respond with the default.
 ```
 
 **Output:**

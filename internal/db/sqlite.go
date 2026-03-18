@@ -142,7 +142,7 @@ func (s *SQLiteStore) CreateFact(ctx context.Context, f *model.Fact) error {
 func (s *SQLiteStore) GetFact(ctx context.Context, id string) (*model.Fact, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, source_file, source_lines, source_ts, fact_type, subject,
-			content, confidence, valid_from, valid_until, superseded_by, created_at
+			content, confidence, valid_from, valid_until, superseded_by, created_at, supersede_reason
 		FROM facts WHERE id = ?`, id)
 	f, err := scanFact(row)
 	if err == sql.ErrNoRows {
@@ -152,7 +152,7 @@ func (s *SQLiteStore) GetFact(ctx context.Context, id string) (*model.Fact, erro
 }
 
 func (s *SQLiteStore) ListFacts(ctx context.Context, filter FactFilter) ([]model.Fact, error) {
-	q := "SELECT id, source_file, source_lines, source_ts, fact_type, subject, content, confidence, valid_from, valid_until, superseded_by, created_at FROM facts WHERE 1=1"
+	q := "SELECT id, source_file, source_lines, source_ts, fact_type, subject, content, confidence, valid_from, valid_until, superseded_by, created_at, supersede_reason FROM facts WHERE 1=1"
 	var args []any
 	if filter.FactType != "" {
 		q += " AND fact_type = ?"
@@ -163,7 +163,7 @@ func (s *SQLiteStore) ListFacts(ctx context.Context, filter FactFilter) ([]model
 		args = append(args, filter.Subject)
 	}
 	if filter.NotSuperseded {
-		q += " AND superseded_by IS NULL"
+		q += " AND superseded_by IS NULL AND supersede_reason IS NULL"
 	}
 	if filter.CreatedAfter != nil {
 		q += " AND created_at > ?"
@@ -242,7 +242,7 @@ func (s *SQLiteStore) SupersedeWithContent(ctx context.Context, oldFactID string
 
 	row := tx.QueryRowContext(ctx, `
 		SELECT id, source_file, source_lines, source_ts, fact_type, subject,
-			content, confidence, valid_from, valid_until, superseded_by, created_at
+			content, confidence, valid_from, valid_until, superseded_by, created_at, supersede_reason
 		FROM facts WHERE id = ?`, oldFactID)
 	old, err := scanFact(row)
 	if err == sql.ErrNoRows {
@@ -450,7 +450,7 @@ func (s *SQLiteStore) SearchByText(ctx context.Context, query string, limit int)
 func (s *SQLiteStore) ListFactsWithoutEmbedding(ctx context.Context) ([]model.Fact, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, source_file, source_lines, source_ts, fact_type, subject,
-			content, confidence, valid_from, valid_until, superseded_by, created_at
+			content, confidence, valid_from, valid_until, superseded_by, created_at, supersede_reason
 		FROM facts WHERE embedding IS NULL
 		ORDER BY created_at DESC`)
 	if err != nil {
@@ -472,7 +472,7 @@ func (s *SQLiteStore) ListFactsWithoutEmbedding(ctx context.Context) ([]model.Fa
 func (s *SQLiteStore) ListFactsByEmbeddingModel(ctx context.Context, modelName string) ([]model.Fact, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, source_file, source_lines, source_ts, fact_type, subject,
-			content, confidence, valid_from, valid_until, superseded_by, created_at
+			content, confidence, valid_from, valid_until, superseded_by, created_at, supersede_reason
 		FROM facts WHERE embedding_model = ?
 		ORDER BY created_at DESC`, modelName)
 	if err != nil {
@@ -599,7 +599,9 @@ func (s *SQLiteStore) ListRelationships(ctx context.Context, filter RelFilter) (
 			r.CreatedAt = *t
 		}
 		if propsJSON.Valid {
-			json.Unmarshal([]byte(propsJSON.String), &r.Properties)
+			if err := json.Unmarshal([]byte(propsJSON.String), &r.Properties); err != nil {
+				return nil, fmt.Errorf("unmarshal relationship properties: %w", err)
+			}
 		}
 		r.SourceFact = sourceFact.String
 		rels = append(rels, r)
@@ -640,7 +642,9 @@ func (s *SQLiteStore) ListConsolidations(ctx context.Context, limit int) ([]mode
 		if t := parseTime(createdAtStr); t != nil {
 			c.CreatedAt = *t
 		}
-		json.Unmarshal([]byte(idsJSON), &c.SourceFactIDs)
+		if err := json.Unmarshal([]byte(idsJSON), &c.SourceFactIDs); err != nil {
+			return nil, fmt.Errorf("unmarshal consolidation source_fact_ids: %w", err)
+		}
 		cons = append(cons, c)
 	}
 	return cons, rows.Err()
@@ -648,7 +652,7 @@ func (s *SQLiteStore) ListConsolidations(ctx context.Context, limit int) ([]mode
 
 func (s *SQLiteStore) ListUnconsolidatedFacts(ctx context.Context, limit int) ([]model.Fact, error) {
 	q := `SELECT id, source_file, source_lines, source_ts, fact_type, subject,
-		content, confidence, valid_from, valid_until, superseded_by, created_at
+		content, confidence, valid_from, valid_until, superseded_by, created_at, supersede_reason
 		FROM facts
 		WHERE id NOT IN (
 			SELECT value FROM consolidations, json_each(consolidations.source_fact_ids)
@@ -1171,11 +1175,11 @@ type scanner interface {
 
 func scanFact(row scanner) (*model.Fact, error) {
 	var f model.Fact
-	var lines, sourceTS, validFrom, validUntil, superseded sql.NullString
+	var lines, sourceTS, validFrom, validUntil, superseded, supersedeReason sql.NullString
 	var createdAtStr string
 	err := row.Scan(&f.ID, &f.Source.TranscriptFile, &lines, &sourceTS,
 		&f.FactType, &f.Subject, &f.Content, &f.Confidence,
-		&validFrom, &validUntil, &superseded, &createdAtStr)
+		&validFrom, &validUntil, &superseded, &createdAtStr, &supersedeReason)
 	if err != nil {
 		return nil, err
 	}
@@ -1191,6 +1195,7 @@ func scanFact(row scanner) (*model.Fact, error) {
 	f.Validity.ValidFrom = parseTimePtr(validFrom)
 	f.Validity.ValidUntil = parseTimePtr(validUntil)
 	f.SupersededBy = superseded.String
+	f.SupersedeReason = supersedeReason.String
 	return &f, nil
 }
 
@@ -1206,7 +1211,9 @@ func scanEntity(row scanner) (*model.Entity, error) {
 	if t := parseTime(createdAtStr); t != nil {
 		e.CreatedAt = *t
 	}
-	json.Unmarshal([]byte(aliasJSON), &e.Aliases)
+	if err := json.Unmarshal([]byte(aliasJSON), &e.Aliases); err != nil {
+		return nil, fmt.Errorf("unmarshal entity aliases: %w", err)
+	}
 	return &e, nil
 }
 
@@ -1225,7 +1232,9 @@ func scanTranscript(row scanner) (*model.Transcript, error) {
 	}
 	t.Date = parseTimePtr(date)
 	t.Topic = topic.String
-	json.Unmarshal([]byte(participantsJSON), &t.Participants)
+	if err := json.Unmarshal([]byte(participantsJSON), &t.Participants); err != nil {
+		return nil, fmt.Errorf("unmarshal transcript participants: %w", err)
+	}
 	return &t, nil
 }
 
@@ -1313,7 +1322,9 @@ func (s *SQLiteStore) GetEntityGraph(ctx context.Context, entityID string, depth
 		if err := rows.Scan(&e.ID, &e.Name, &e.EntityType, &aliasesJSON, &createdStr); err != nil {
 			return nil, fmt.Errorf("scan entity: %w", err)
 		}
-		json.Unmarshal([]byte(aliasesJSON), &e.Aliases)
+		if err := json.Unmarshal([]byte(aliasesJSON), &e.Aliases); err != nil {
+			return nil, fmt.Errorf("unmarshal graph entity aliases: %w", err)
+		}
 		e.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 		entities = append(entities, e)
 		entityIDs[e.ID] = true
@@ -1364,7 +1375,9 @@ func (s *SQLiteStore) GetEntityGraph(ctx context.Context, entityID string, depth
 		if err := relRows.Scan(&r.ID, &r.FromEntity, &r.ToEntity, &r.RelationType, &propsJSON, &sourceFact, &createdStr); err != nil {
 			return nil, fmt.Errorf("scan relationship: %w", err)
 		}
-		json.Unmarshal([]byte(propsJSON), &r.Properties)
+		if err := json.Unmarshal([]byte(propsJSON), &r.Properties); err != nil {
+			return nil, fmt.Errorf("unmarshal graph relationship properties: %w", err)
+		}
 		if sourceFact.Valid {
 			r.SourceFact = sourceFact.String
 		}
@@ -1479,15 +1492,19 @@ func (s *SQLiteStore) reconstructPath(ctx context.Context, fromID, toID string, 
 
 func (s *SQLiteStore) SupersedeRealtimeBySession(ctx context.Context, sessionID string) (int64, error) {
 	prefix := "realtime:" + sessionID
-	// Temporarily disable FK checks so we can use a sentinel value
-	// ('batch-replaced') that is not a real fact ID.
-	s.db.ExecContext(ctx, "PRAGMA foreign_keys = OFF")
-	res, err := s.db.ExecContext(ctx,
-		"UPDATE facts SET superseded_by = 'batch-replaced' WHERE source_file = ? AND (superseded_by IS NULL OR superseded_by = '')",
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx,
+		"UPDATE facts SET supersede_reason = 'batch-replaced' WHERE source_file = ? AND (superseded_by IS NULL OR superseded_by = '') AND supersede_reason IS NULL",
 		prefix)
-	s.db.ExecContext(ctx, "PRAGMA foreign_keys = ON")
 	if err != nil {
 		return 0, fmt.Errorf("supersede realtime facts for session %s: %w", sessionID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
 	}
 	return res.RowsAffected()
 }
@@ -1500,6 +1517,132 @@ func (s *SQLiteStore) DeleteExpiredFacts(ctx context.Context, olderThan time.Tim
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// --- Admin ---
+
+func (s *SQLiteStore) Reset(ctx context.Context) error {
+	tables := []string{
+		"facts_vec", "chunks_vec",
+		"facts_fts", "transcript_chunks_fts",
+		"fact_connections", "relationships", "consolidations",
+		"taxonomy_signals", "taxonomy_proposals",
+		"extraction_log", "ingested_files",
+		"transcript_chunks", "transcripts",
+		"facts", "entities",
+		"schema_migrations",
+	}
+	for _, t := range tables {
+		if _, err := s.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+t); err != nil {
+			return fmt.Errorf("drop %s: %w", t, err)
+		}
+	}
+	return s.migrate()
+}
+
+func (s *SQLiteStore) DeleteFactsBySourcePattern(ctx context.Context, pattern string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM facts_fts WHERE fact_id IN (SELECT id FROM facts WHERE source_file LIKE ?)", pattern); err != nil {
+		return 0, fmt.Errorf("delete fts: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		"DELETE FROM facts_vec WHERE fact_id IN (SELECT id FROM facts WHERE source_file LIKE ?)", pattern); err != nil {
+		if !strings.Contains(err.Error(), "no such table") {
+			return 0, fmt.Errorf("delete vec: %w", err)
+		}
+	}
+
+	res, err := tx.ExecContext(ctx,
+		"DELETE FROM facts WHERE source_file LIKE ?", pattern)
+	if err != nil {
+		return 0, fmt.Errorf("delete facts: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return n, nil
+}
+
+func (s *SQLiteStore) DeduplicateEntities(ctx context.Context) (int, int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT LOWER(name) AS lname, COUNT(*) AS cnt
+		FROM entities
+		GROUP BY lname
+		HAVING cnt > 1`)
+	if err != nil {
+		return 0, 0, fmt.Errorf("find duplicates: %w", err)
+	}
+	defer rows.Close()
+
+	var dupeNames []string
+	for rows.Next() {
+		var name string
+		var cnt int
+		if err := rows.Scan(&name, &cnt); err != nil {
+			return 0, 0, err
+		}
+		dupeNames = append(dupeNames, name)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+
+	groups := 0
+	totalRemoved := 0
+
+	for _, lname := range dupeNames {
+		entRows, err := s.db.QueryContext(ctx, `
+			SELECT id, name, entity_type, aliases, created_at
+			FROM entities
+			WHERE LOWER(name) = ?
+			ORDER BY created_at ASC`, lname)
+		if err != nil {
+			return groups, totalRemoved, fmt.Errorf("list dupes for %s: %w", lname, err)
+		}
+
+		var ids []string
+		for entRows.Next() {
+			var e struct{ id, name, etype, aliases, created string }
+			if err := entRows.Scan(&e.id, &e.name, &e.etype, &e.aliases, &e.created); err != nil {
+				entRows.Close()
+				return groups, totalRemoved, err
+			}
+			ids = append(ids, e.id)
+		}
+		entRows.Close()
+
+		if len(ids) < 2 {
+			continue
+		}
+
+		keepID := ids[0]
+		removeIDs := ids[1:]
+
+		for _, oldID := range removeIDs {
+			s.db.ExecContext(ctx,
+				"UPDATE relationships SET from_entity = ? WHERE from_entity = ?", keepID, oldID)
+			s.db.ExecContext(ctx,
+				"UPDATE relationships SET to_entity = ? WHERE to_entity = ?", keepID, oldID)
+			s.db.ExecContext(ctx, "DELETE FROM entities WHERE id = ?", oldID)
+		}
+
+		groups++
+		totalRemoved += len(removeIDs)
+	}
+
+	return groups, totalRemoved, nil
 }
 
 func (s *SQLiteStore) Stats(ctx context.Context) (*DBStats, error) {
