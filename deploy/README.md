@@ -7,10 +7,18 @@
 
 ## Quick start
 
-1. Copy `.env.example` to `.env` and fill in your API keys
-2. Adjust `config.toml` if needed (provider priorities, consolidation settings)
-3. `docker-compose up -d`
-4. Watchtower auto-updates the container when new commits are pushed to main
+```bash
+cd deploy/
+cp .env.example .env          # fill in your API keys
+cp config.toml.example config.toml  # edit provider priorities, models, etc.
+docker-compose up -d
+```
+
+1. **`.env`** -- API keys (GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY). At least one is required.
+2. **`config.toml`** -- provider chains, consolidation settings, embedding config. The example uses Google Gemini as primary with OpenAI and Anthropic as fallbacks. Edit to match your API keys.
+3. **`docker-compose up -d`** -- starts Imprint + Watchtower (auto-updates from ghcr.io)
+
+Both `config.toml` and `.env` must exist before running docker-compose. If `config.toml` is missing, Docker creates an empty directory instead of a file and Imprint will fail to start.
 
 ## Modes
 

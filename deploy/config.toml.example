@@ -1,0 +1,94 @@
+# Imprint configuration for Docker deployment
+# Copy to config.toml and fill in your values:
+#   cp config.toml.example config.toml
+
+[db]
+path = "/data/memory.db"
+
+[consolidation]
+interval_minutes = 60
+min_facts = 10
+max_group_size = 20
+dedup_similarity_threshold = 0.9
+
+[embedding]
+dimensions = 1536
+distance_metric = "cosine"
+
+[[providers.embedding]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 15
+priority = 1
+
+[api]
+host = "0.0.0.0"
+port = 8080
+
+[watcher]
+path = "/transcripts"
+poll_interval_seconds = 30
+debounce_seconds = 2
+consolidate_after_ingest = true
+
+[prompts]
+extraction = "/etc/imprint/prompts/extraction-prompt.md"
+consolidation = "/etc/imprint/prompts/consolidation-prompt.md"
+query = "/etc/imprint/prompts/query-prompt.md"
+
+# Provider chains: ordered by priority (first = tried first).
+# api_key_env is the name of the environment variable holding the key.
+#
+# Provider types (determined by "name" field):
+#   "anthropic" -> Anthropic Messages API (/v1/messages)
+#   "ollama"    -> Ollama native API (/api/chat), no API key needed
+#   anything else -> OpenAI-compatible (/v1/chat/completions)
+#     Covers: OpenAI, Google Gemini, OpenRouter, Groq, Together, etc.
+
+# --- Extraction providers ---
+
+[[providers.extraction]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 120
+priority = 1
+
+[[providers.extraction]]
+name = "anthropic"
+base_url = "https://api.anthropic.com"
+model = "claude-haiku-4"
+api_key_env = "ANTHROPIC_API_KEY"
+timeout_seconds = 120
+priority = 2
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-5-nano"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 120
+priority = 3
+
+# --- Consolidation providers ---
+
+[[providers.consolidation]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 60
+priority = 1
+
+# --- Query providers ---
+
+[[providers.query]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 30
+priority = 1
