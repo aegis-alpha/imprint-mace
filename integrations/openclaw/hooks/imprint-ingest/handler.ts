@@ -122,8 +122,11 @@ const handler = async (event: any) => {
         } catch {
           recordResult(pattern, 0);
         }
+      } else {
+        recordResult(pattern, 0);
       }
     } catch (err) {
+      reachable = false;
       console.error("[imprint-ingest] failed to send to Imprint:", err);
     }
   })();

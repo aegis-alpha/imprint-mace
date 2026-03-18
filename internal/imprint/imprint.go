@@ -121,19 +121,20 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 
 	nameToID := make(map[string]string, len(extracted.Entities))
 	for i := range extracted.Entities {
-		name := strings.TrimSpace(extracted.Entities[i].Name)
+		extracted.Entities[i].Name = strings.TrimSpace(extracted.Entities[i].Name)
+		name := extracted.Entities[i].Name
 		existing, err := e.store.GetEntityByName(ctx, name)
 		if err == nil && existing != nil {
-			nameToID[extracted.Entities[i].Name] = existing.ID
+			nameToID[name] = existing.ID
 			result.EntityIDs = append(result.EntityIDs, existing.ID)
 			continue
 		}
 		if err := e.store.CreateEntity(ctx, &extracted.Entities[i]); err != nil {
 			e.logger.Warn("failed to store entity",
-				"name", extracted.Entities[i].Name, "error", err)
+				"name", name, "error", err)
 			continue
 		}
-		nameToID[extracted.Entities[i].Name] = extracted.Entities[i].ID
+		nameToID[name] = extracted.Entities[i].ID
 		result.EntityIDs = append(result.EntityIDs, extracted.Entities[i].ID)
 	}
 	result.EntitiesCount = len(result.EntityIDs)

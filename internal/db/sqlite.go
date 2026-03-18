@@ -31,7 +31,7 @@ func Open(path string) (*SQLiteStore, error) {
 	}
 	s := &SQLiteStore{db: db}
 	if err := s.migrate(); err != nil {
-		db.Close()
+		db.Close() //nolint:gosec // best-effort cleanup on migration failure
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return s, nil
@@ -1273,8 +1273,8 @@ func parseLineRange(s string) *[2]int {
 		return nil
 	}
 	var r [2]int
-	fmt.Sscanf(parts[0], "%d", &r[0])
-	fmt.Sscanf(parts[1], "%d", &r[1])
+	fmt.Sscanf(parts[0], "%d", &r[0]) //nolint:gosec // best-effort parse; zero is safe default
+	fmt.Sscanf(parts[1], "%d", &r[1]) //nolint:gosec // best-effort parse; zero is safe default
 	return &r
 }
 
@@ -1616,12 +1616,12 @@ func (s *SQLiteStore) DeduplicateEntities(ctx context.Context) (int, int, error)
 		for entRows.Next() {
 			var e struct{ id, name, etype, aliases, created string }
 			if err := entRows.Scan(&e.id, &e.name, &e.etype, &e.aliases, &e.created); err != nil {
-				entRows.Close()
+				entRows.Close() //nolint:gosec // error path; returning scan error
 				return groups, totalRemoved, err
 			}
 			ids = append(ids, e.id)
 		}
-		entRows.Close()
+		entRows.Close() //nolint:gosec // rows fully consumed above
 
 		if len(ids) < 2 {
 			continue
@@ -1631,11 +1631,17 @@ func (s *SQLiteStore) DeduplicateEntities(ctx context.Context) (int, int, error)
 		removeIDs := ids[1:]
 
 		for _, oldID := range removeIDs {
-			s.db.ExecContext(ctx,
-				"UPDATE relationships SET from_entity = ? WHERE from_entity = ?", keepID, oldID)
-			s.db.ExecContext(ctx,
-				"UPDATE relationships SET to_entity = ? WHERE to_entity = ?", keepID, oldID)
-			s.db.ExecContext(ctx, "DELETE FROM entities WHERE id = ?", oldID)
+			if _, err := s.db.ExecContext(ctx,
+				"UPDATE relationships SET from_entity = ? WHERE from_entity = ?", keepID, oldID); err != nil {
+				return groups, totalRemoved, fmt.Errorf("update from_entity %s->%s: %w", oldID, keepID, err)
+			}
+			if _, err := s.db.ExecContext(ctx,
+				"UPDATE relationships SET to_entity = ? WHERE to_entity = ?", keepID, oldID); err != nil {
+				return groups, totalRemoved, fmt.Errorf("update to_entity %s->%s: %w", oldID, keepID, err)
+			}
+			if _, err := s.db.ExecContext(ctx, "DELETE FROM entities WHERE id = ?", oldID); err != nil {
+				return groups, totalRemoved, fmt.Errorf("delete entity %s: %w", oldID, err)
+			}
 		}
 
 		groups++
