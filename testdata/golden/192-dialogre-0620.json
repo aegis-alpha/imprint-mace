@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Emma",
+      "content": "Emma is one-year old years old.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Emma",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "one-year old",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[620] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

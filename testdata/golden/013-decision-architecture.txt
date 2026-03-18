@@ -1,0 +1,2 @@
+User: The API gateway will be written in Rust. Backend services stay in Python. Frontend is React with TypeScript.
+Assistant: Three-language stack. Any concerns about maintenance?

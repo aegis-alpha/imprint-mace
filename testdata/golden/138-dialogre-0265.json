@@ -1,0 +1,57 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Monica",
+      "content": "Monica and honey are siblings.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "honey",
+      "content": "honey and Monica are siblings.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Monica",
+      "entity_type": "person",
+      "aliases": [
+        "Mon"
+      ]
+    },
+    {
+      "name": "Honey",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Mon",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "honey",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Monica",
+      "to_entity": "honey",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "honey",
+      "to_entity": "Monica",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[265] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

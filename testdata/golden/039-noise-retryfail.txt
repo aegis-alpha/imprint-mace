@@ -1,0 +1,6 @@
+Attempt 1/5: POST https://api.example.com/v1/extract - 503 Service Unavailable
+Retrying in 2s...
+Attempt 2/5: POST https://api.example.com/v1/extract - 503 Service Unavailable
+Retrying in 4s...
+Attempt 3/5: POST https://api.example.com/v1/extract - 503 Service Unavailable
+All retries exhausted. Giving up.

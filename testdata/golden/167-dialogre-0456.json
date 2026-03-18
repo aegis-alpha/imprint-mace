@@ -1,0 +1,46 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Rigatoni",
+      "content": "Rigatoni visited Rome.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rigatoni",
+      "entity_type": "person",
+      "aliases": [
+        "sweetie"
+      ]
+    },
+    {
+      "name": "Rome",
+      "entity_type": "location",
+      "aliases": []
+    },
+    {
+      "name": "sweetie",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Rigatoni",
+      "to_entity": "Rome",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Rome",
+      "to_entity": "Rigatoni",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[456] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

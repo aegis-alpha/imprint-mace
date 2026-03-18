@@ -1,0 +1,55 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "User",
+      "content": "User owns the payment service and the notification service.",
+      "confidence": 0.95
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Jake",
+      "content": "Jake owns the user service.",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Jake",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "payment service",
+      "entity_type": "project",
+      "aliases": []
+    },
+    {
+      "name": "user service",
+      "entity_type": "project",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "User",
+      "to_entity": "payment service",
+      "relation_type": "owns"
+    },
+    {
+      "from_entity": "Jake",
+      "to_entity": "user service",
+      "relation_type": "owns"
+    }
+  ],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "technical"
+  }
+}

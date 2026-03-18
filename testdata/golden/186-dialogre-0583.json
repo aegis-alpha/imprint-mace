@@ -1,0 +1,39 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Warren",
+      "content": "Warren works at museum.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rach",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Warren",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "museum",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Warren",
+      "to_entity": "museum",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[583] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

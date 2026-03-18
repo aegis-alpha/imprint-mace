@@ -1,0 +1,56 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Paolo",
+      "content": "Paolo lives in Torino.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Monica",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "honey",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Paolo",
+      "entity_type": "person",
+      "aliases": [
+        "weenie"
+      ]
+    },
+    {
+      "name": "Torino",
+      "entity_type": "location",
+      "aliases": []
+    },
+    {
+      "name": "weenie",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Paolo",
+      "to_entity": "Torino",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Torino",
+      "to_entity": "Paolo",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[334] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

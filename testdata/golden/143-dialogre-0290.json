@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Frankie",
+      "content": "Frankie holds the title of tailor.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Frankie",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "tailor",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[290] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

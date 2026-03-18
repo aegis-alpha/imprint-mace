@@ -1,0 +1,44 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Mark",
+      "content": "Mark is a member of Bloomingdale's.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Bloomingdale's",
+      "entity_type": "organization",
+      "aliases": []
+    },
+    {
+      "name": "Mark",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Rachel",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Bloomingdale's",
+      "to_entity": "Mark",
+      "relation_type": "part_of"
+    },
+    {
+      "from_entity": "Mark",
+      "to_entity": "Bloomingdale's",
+      "relation_type": "part_of"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[313] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

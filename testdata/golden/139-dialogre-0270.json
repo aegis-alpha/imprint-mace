@@ -1,0 +1,33 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "little Harmonica",
+      "content": "little Harmonica is thirty years old.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "little Harmonica",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "thirty",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "my friend",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[270] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

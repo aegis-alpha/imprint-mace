@@ -1,0 +1,6 @@
+User: wait, go back
+Assistant: Sure, going back to the previous topic.
+User: no, the one before that
+Assistant: The database migration discussion?
+User: yes that one. actually hold on, let me check something first
+Assistant: Take your time.

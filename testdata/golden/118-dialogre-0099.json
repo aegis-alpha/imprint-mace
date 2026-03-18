@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Gandolf",
+      "content": "Gandolf holds the title of wizard.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Gandolf",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "wizard",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[99] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

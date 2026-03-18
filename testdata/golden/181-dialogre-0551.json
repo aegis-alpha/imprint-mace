@@ -1,0 +1,121 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "honey",
+      "content": "honey and Will Colbert are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "honey",
+      "content": "honey and Will Colbert are friends.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "honey",
+      "content": "honey and Ross are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Will Colbert",
+      "content": "Will Colbert and honey are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Will Colbert",
+      "content": "Will Colbert and honey are friends.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Will Colbert",
+      "content": "Will Colbert and Ross are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Ross",
+      "content": "Ross and honey are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Ross",
+      "content": "Ross and Will Colbert are alumni of the same school.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "honey",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Jarred",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Will Colbert",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Chandler",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Ross",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Honey",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "honey",
+      "to_entity": "Will Colbert",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "honey",
+      "to_entity": "Ross",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Will Colbert",
+      "to_entity": "honey",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Will Colbert",
+      "to_entity": "Ross",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Ross",
+      "to_entity": "honey",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Ross",
+      "to_entity": "Will Colbert",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[551] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

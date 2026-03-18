@@ -1,0 +1,23 @@
+{
+  "facts": [
+    {
+      "fact_type": "preference",
+      "subject": "User",
+      "content": "User prefers dark mode in all editors because light themes cause headaches.",
+      "confidence": 0.95
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "personal"
+  }
+}

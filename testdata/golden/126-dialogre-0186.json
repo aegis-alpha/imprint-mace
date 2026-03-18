@@ -1,0 +1,68 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Erica Ford",
+      "content": "Erica Ford and Dr. Remore are neighbors.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Dr. Remore",
+      "content": "Dr. Remore works with Days of Our Lives.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Dr. Remore",
+      "content": "Dr. Remore and Erica Ford are neighbors.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Erica Ford",
+      "entity_type": "person",
+      "aliases": [
+        "stalker"
+      ]
+    },
+    {
+      "name": "Dr. Remore",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "stalker",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Days of Our Lives",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Erica Ford",
+      "to_entity": "Dr. Remore",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Dr. Remore",
+      "to_entity": "Days of Our Lives",
+      "relation_type": "works_on"
+    },
+    {
+      "from_entity": "Dr. Remore",
+      "to_entity": "Erica Ford",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[186] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

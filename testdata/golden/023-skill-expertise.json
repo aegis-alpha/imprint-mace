@@ -1,0 +1,46 @@
+{
+  "facts": [
+    {
+      "fact_type": "skill",
+      "subject": "User",
+      "content": "User is fluent in Go, Rust, and Python.",
+      "confidence": 0.95
+    },
+    {
+      "fact_type": "skill",
+      "subject": "User",
+      "content": "User has basic Haskell knowledge but is not proficient.",
+      "confidence": 0.7
+    },
+    {
+      "fact_type": "skill",
+      "subject": "Ana",
+      "content": "Ana is the Kubernetes expert on the team.",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Ana",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Ana",
+      "to_entity": "User",
+      "relation_type": "manages"
+    }
+  ],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "personal"
+  }
+}

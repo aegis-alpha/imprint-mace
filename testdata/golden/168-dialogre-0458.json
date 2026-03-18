@@ -1,0 +1,62 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Ross",
+      "content": "Ross and dude are friends.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Ross",
+      "content": "Ross and dude are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "dude",
+      "content": "dude and Ross are friends.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "dude",
+      "content": "dude and Ross are alumni of the same school.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Ross",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Dude",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "dude",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Ross",
+      "to_entity": "dude",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "dude",
+      "to_entity": "Ross",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[458] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

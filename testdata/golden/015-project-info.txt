@@ -1,0 +1,2 @@
+User: Phoenix is our internal dashboard. It runs on three nodes in AWS us-east-1. The repo is github.com/acme/phoenix.
+Assistant: Got it. Phoenix dashboard, 3 nodes, us-east-1.

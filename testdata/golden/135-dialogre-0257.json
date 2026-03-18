@@ -1,0 +1,35 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Max",
+      "content": "Max holds the title of scientist.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Max",
+      "entity_type": "person",
+      "aliases": [
+        "scientist geek"
+      ]
+    },
+    {
+      "name": "scientist",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "scientist geek",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[257] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

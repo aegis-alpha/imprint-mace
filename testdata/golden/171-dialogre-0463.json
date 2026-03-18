@@ -1,0 +1,39 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Van Morrison",
+      "content": "Van Morrison works with Tupolo Honey.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Van Morrison",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Tupolo Honey",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Pheebs",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Van Morrison",
+      "to_entity": "Tupolo Honey",
+      "relation_type": "works_on"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[463] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

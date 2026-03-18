@@ -1,0 +1,23 @@
+{
+  "facts": [
+    {
+      "fact_type": "lesson",
+      "subject": "database",
+      "content": "Relational databases should be used for any workload requiring ACID transactions; NoSQL was a disaster for transactional data.",
+      "confidence": 0.95
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "technical"
+  }
+}

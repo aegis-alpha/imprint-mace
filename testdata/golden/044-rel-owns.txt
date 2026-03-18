@@ -1,0 +1,2 @@
+User: I own the payment service and the notification service. Jake owns the user service.
+Assistant: Ownership noted.

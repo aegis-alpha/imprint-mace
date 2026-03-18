@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Rach",
+      "content": "Rach holds the title of waitress.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rach",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "waitress",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[256] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

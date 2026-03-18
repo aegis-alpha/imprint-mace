@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Molly",
+      "content": "Molly holds the title of nanny.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Molly",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "nanny",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[311] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

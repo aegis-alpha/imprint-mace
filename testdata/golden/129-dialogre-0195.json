@@ -1,0 +1,39 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Barry",
+      "content": "Barry visited Bermuda.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Barry",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Bermuda",
+      "entity_type": "location",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Barry",
+      "to_entity": "Bermuda",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Bermuda",
+      "to_entity": "Barry",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[195] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

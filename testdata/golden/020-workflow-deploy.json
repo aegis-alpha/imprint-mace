@@ -1,0 +1,23 @@
+{
+  "facts": [
+    {
+      "fact_type": "workflow",
+      "subject": "deployment",
+      "content": "Deploy procedure: merge to main, wait for CI green, run db:migrate on staging, smoke test staging, promote to production, monitor for 30 minutes.",
+      "confidence": 0.95
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "technical"
+  }
+}

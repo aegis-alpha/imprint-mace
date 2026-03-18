@@ -1,0 +1,10 @@
+{
+  "facts": [],
+  "entities": [],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "noise"
+  }
+}

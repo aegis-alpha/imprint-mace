@@ -1,0 +1,52 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Janine",
+      "content": "Janine and sweetie are roommates.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "sweetie",
+      "content": "sweetie and Janine are roommates.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Janine",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "sweetie",
+      "entity_type": "person",
+      "aliases": [
+        "Joe"
+      ]
+    },
+    {
+      "name": "Joe",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Janine",
+      "to_entity": "sweetie",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "sweetie",
+      "to_entity": "Janine",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[435] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

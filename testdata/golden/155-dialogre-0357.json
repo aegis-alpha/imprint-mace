@@ -1,0 +1,60 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Rach",
+      "content": "Rach has a child named Emma.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Emma",
+      "content": "Emma is a parent of Rach.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rach",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "baby",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Pheebs",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Emma",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "buddy",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Rach",
+      "to_entity": "Emma",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Emma",
+      "to_entity": "Rach",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[357] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "sweetheart",
+      "content": "sweetheart holds the title of actor.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "sweetheart",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "girl",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "actor",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[202] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

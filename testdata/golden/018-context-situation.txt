@@ -1,0 +1,2 @@
+User: The staging server is down right now. We're waiting for the AWS team to fix the EBS volume. Should be back in 2 hours.
+Assistant: Staging down, EBS issue, ETA 2 hours.

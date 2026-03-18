@@ -1,0 +1,45 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "sweetie",
+      "content": "sweetie and Ross are in a relationship.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Ross",
+      "content": "Ross and sweetie are in a relationship.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "sweetie",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Ross",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "sweetie",
+      "to_entity": "Ross",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Ross",
+      "to_entity": "sweetie",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[192] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

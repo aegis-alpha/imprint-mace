@@ -1,0 +1,55 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "David",
+      "content": "David holds the title of scientist.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "David",
+      "content": "David lives in Minsk.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "David",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "scientist",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Minsk",
+      "entity_type": "location",
+      "aliases": []
+    },
+    {
+      "name": "uncle Joey",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "David",
+      "to_entity": "Minsk",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Minsk",
+      "to_entity": "David",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[464] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

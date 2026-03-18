@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Hillary",
+      "content": "Hillary holds the title of assistant chef.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Hillary",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "assistant chef",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[366] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

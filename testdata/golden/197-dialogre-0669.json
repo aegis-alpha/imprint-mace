@@ -1,0 +1,52 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Steven",
+      "content": "Steven and Darling are married.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Darling",
+      "content": "Darling and Steven are married.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Steven",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Darling",
+      "entity_type": "person",
+      "aliases": [
+        "Andrea Waltham"
+      ]
+    },
+    {
+      "name": "Andrea Waltham",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Steven",
+      "to_entity": "Darling",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Darling",
+      "to_entity": "Steven",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[669] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

@@ -1,0 +1,6 @@
+CRON[12345]: (root) CMD (/usr/local/bin/backup.sh)
+backup.sh: Starting backup at 2026-03-18 04:00:00
+backup.sh: Dumping database...
+backup.sh: Compressing...
+backup.sh: Upload to S3 complete.
+backup.sh: Backup finished in 142 seconds.

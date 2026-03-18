@@ -1,0 +1,2 @@
+User: Sarah leads the platform team. Marcus is the DevOps lead. They both report to VP of Engineering, David Chen.
+Assistant: Org structure noted.

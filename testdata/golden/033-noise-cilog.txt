@@ -1,0 +1,9 @@
+Run actions/checkout@v4
+Syncing repository: acme/phoenix
+Checking out revision abc123
+Run actions/setup-go@v5
+Go version: 1.22.1
+Run go test ./...
+ok   acme/phoenix/internal/api  1.234s
+ok   acme/phoenix/internal/db   2.567s
+PASS

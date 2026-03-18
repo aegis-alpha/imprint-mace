@@ -1,0 +1,29 @@
+{
+  "facts": [
+    {
+      "fact_type": "preference",
+      "subject": "User",
+      "content": "User prefers Slack over email for all communications.",
+      "confidence": 0.95
+    },
+    {
+      "fact_type": "preference",
+      "subject": "User",
+      "content": "User wants text messages for urgent matters.",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "personal"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "dude",
+      "content": "dude visited Ohio.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rachel",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Pheebs",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "dude",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Ohio",
+      "entity_type": "location",
+      "aliases": []
+    },
+    {
+      "name": "Ross",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Ohio",
+      "to_entity": "dude",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "dude",
+      "to_entity": "Ohio",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[346] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

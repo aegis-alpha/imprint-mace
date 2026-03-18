@@ -1,0 +1,2 @@
+User: We need to ship the v2 API by end of Q2. The mobile app launch depends on it. If we miss Q2, the whole product launch slips to September.
+Assistant: Hard deadline: v2 API by end of Q2. Mobile app blocked on it.

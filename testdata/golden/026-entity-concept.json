@@ -1,0 +1,61 @@
+{
+  "facts": [
+    {
+      "fact_type": "decision",
+      "subject": "order system",
+      "content": "The order system uses event sourcing.",
+      "confidence": 0.9
+    },
+    {
+      "fact_type": "decision",
+      "subject": "order system",
+      "content": "CQRS is used to separate reads from writes in the order system.",
+      "confidence": 0.9
+    },
+    {
+      "fact_type": "decision",
+      "subject": "order system",
+      "content": "The saga pattern handles distributed transactions across services.",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "event sourcing",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "CQRS",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "saga pattern",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "order system",
+      "entity_type": "project",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "order system",
+      "to_entity": "event sourcing",
+      "relation_type": "uses"
+    },
+    {
+      "from_entity": "order system",
+      "to_entity": "CQRS",
+      "relation_type": "uses"
+    }
+  ],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "technical"
+  }
+}

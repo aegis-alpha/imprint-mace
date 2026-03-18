@@ -1,0 +1,65 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "man",
+      "content": "man and buddy are friends.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "man",
+      "content": "man is 29 years old.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "buddy",
+      "content": "buddy and man are friends.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "man",
+      "entity_type": "person",
+      "aliases": [
+        "buddy"
+      ]
+    },
+    {
+      "name": "buddy",
+      "entity_type": "concept",
+      "aliases": [
+        "my friend"
+      ]
+    },
+    {
+      "name": "my friend",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "29",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "man",
+      "to_entity": "buddy",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "buddy",
+      "to_entity": "man",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[288] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Knick fan",
+      "content": "Knick fan is 25 years old.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Knick fan",
+      "content": "Knick fan holds the title of actor.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Knick fan",
+      "entity_type": "person",
+      "aliases": [
+        "Joey Tribbiani"
+      ]
+    },
+    {
+      "name": "25",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Knick",
+      "entity_type": "organization",
+      "aliases": []
+    },
+    {
+      "name": "Joey Tribbiani",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "actor",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "baby",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[442] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

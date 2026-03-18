@@ -1,0 +1,48 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Ross Geller",
+      "content": "Ross Geller works at museum.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rachel",
+      "entity_type": "person",
+      "aliases": [
+        "R.G."
+      ]
+    },
+    {
+      "name": "R.G.",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Ross Geller",
+      "entity_type": "person",
+      "aliases": [
+        "R.G."
+      ]
+    },
+    {
+      "name": "museum",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Ross Geller",
+      "to_entity": "museum",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[479] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

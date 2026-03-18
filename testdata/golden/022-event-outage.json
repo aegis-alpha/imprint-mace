@@ -1,0 +1,29 @@
+{
+  "facts": [
+    {
+      "fact_type": "event",
+      "subject": "production",
+      "content": "Production experienced an outage at 3am caused by a memory leak in the payment service.",
+      "confidence": 0.95
+    },
+    {
+      "fact_type": "event",
+      "subject": "production",
+      "content": "The production outage took 4 hours to restore.",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "payment service",
+      "entity_type": "tool",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "technical"
+  }
+}

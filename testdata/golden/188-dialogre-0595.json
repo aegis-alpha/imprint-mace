@@ -1,0 +1,66 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "noisy boy",
+      "content": "noisy boy and noisy boy are friends.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Daryl Hannah",
+      "content": "Daryl Hannah works with Wall Street.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Daryl Hannah",
+      "content": "Daryl Hannah works with Splash.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "noisy boy",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Daryl Hannah",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Wall Street",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Splash",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "noisy boy",
+      "to_entity": "noisy boy",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Daryl Hannah",
+      "to_entity": "Wall Street",
+      "relation_type": "works_on"
+    },
+    {
+      "from_entity": "Daryl Hannah",
+      "to_entity": "Splash",
+      "relation_type": "works_on"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[595] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

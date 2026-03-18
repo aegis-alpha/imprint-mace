@@ -1,0 +1,34 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Doody Blues",
+      "content": "Doody Blues works with Knights in White Satin.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Doody Blues",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Knights in White Satin",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Doody Blues",
+      "to_entity": "Knights in White Satin",
+      "relation_type": "works_on"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[48] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

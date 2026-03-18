@@ -1,0 +1,39 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Pete",
+      "content": "Pete visited Atlanta.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Pete",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Atlanta",
+      "entity_type": "location",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Pete",
+      "to_entity": "Atlanta",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Atlanta",
+      "to_entity": "Pete",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[80] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

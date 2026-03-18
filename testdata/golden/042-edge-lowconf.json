@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "project",
+      "subject": "cloud provider",
+      "content": "There may be a potential switch from AWS to Azure next year, but this is unconfirmed and possibly not serious.",
+      "confidence": 0.35
+    }
+  ],
+  "entities": [
+    {
+      "name": "AWS",
+      "entity_type": "organization",
+      "aliases": []
+    },
+    {
+      "name": "Azure",
+      "entity_type": "tool",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "edge_case"
+  }
+}

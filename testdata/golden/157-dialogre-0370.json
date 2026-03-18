@@ -1,0 +1,45 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Barbara Streisand",
+      "content": "Barbara Streisand and James Brolin are married.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "James Brolin",
+      "content": "James Brolin and Barbara Streisand are married.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Barbara Streisand",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "James Brolin",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Barbara Streisand",
+      "to_entity": "James Brolin",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "James Brolin",
+      "to_entity": "Barbara Streisand",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[370] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

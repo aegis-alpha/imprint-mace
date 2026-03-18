@@ -1,0 +1,61 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "man",
+      "content": "man and Emily are married.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Emily",
+      "content": "Emily is originally from British.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Emily",
+      "content": "Emily and man are married.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Pheebs",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "man",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Emily",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "British",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "man",
+      "to_entity": "Emily",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Emily",
+      "to_entity": "man",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[491] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

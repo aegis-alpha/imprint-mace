@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Pheebs",
+      "content": "Pheebs is 31 years old.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Pheebs",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "31",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[277] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Rhonda",
+      "content": "Rhonda works at museum.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Rhonda",
+      "content": "Rhonda and Peter are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "man",
+      "content": "man works at museum.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "man",
+      "content": "man holds the title of doctor.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Peter",
+      "content": "Peter and Rhonda are alumni of the same school.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Peter",
+      "content": "Peter works at museum.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Peter",
+      "content": "Peter holds the title of scientist.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rhonda",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "museum",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Peter",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "man",
+      "entity_type": "person",
+      "aliases": [
+        "Dr. Geller"
+      ]
+    },
+    {
+      "name": "Dr. Geller",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "my friend",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "doctor",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "scientist",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Rhonda",
+      "to_entity": "museum",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Rhonda",
+      "to_entity": "Peter",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "man",
+      "to_entity": "museum",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Peter",
+      "to_entity": "Rhonda",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Peter",
+      "to_entity": "museum",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[454] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

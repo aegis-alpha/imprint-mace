@@ -1,0 +1,2 @@
+User: Can you check why the Berlin office can't reach the API? They've been complaining since Monday.
+Assistant: I'll look into the connectivity issue from Berlin.

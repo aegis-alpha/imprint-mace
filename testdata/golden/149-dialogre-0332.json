@@ -1,0 +1,57 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Marshal Talmant",
+      "content": "Marshal Talmant holds the title of director.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Marshal Talmant",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "director",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Kate",
+      "entity_type": "person",
+      "aliases": [
+        "Kate Miller"
+      ]
+    },
+    {
+      "name": "Kate Miller",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Mr. Tribianni",
+      "entity_type": "person",
+      "aliases": [
+        "Joey Tribianni"
+      ]
+    },
+    {
+      "name": "girl",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Joey Tribianni",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[332] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

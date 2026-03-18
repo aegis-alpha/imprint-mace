@@ -1,0 +1,52 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "User",
+      "content": "User studied computer science at MIT, graduating in 2018.",
+      "confidence": 0.95
+    },
+    {
+      "fact_type": "bio",
+      "subject": "User",
+      "content": "User worked at Google for 3 years on Cloud Spanner before current job.",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "MIT",
+      "entity_type": "organization",
+      "aliases": []
+    },
+    {
+      "name": "Google",
+      "entity_type": "organization",
+      "aliases": []
+    },
+    {
+      "name": "Cloud Spanner",
+      "entity_type": "tool",
+      "aliases": [
+        "Spanner"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "User",
+      "to_entity": "Google",
+      "relation_type": "works_on"
+    }
+  ],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "personal"
+  }
+}

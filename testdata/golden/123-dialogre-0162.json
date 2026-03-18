@@ -1,0 +1,46 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Rach",
+      "content": "Rach has a pet named Twinkles.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Rach",
+      "entity_type": "person",
+      "aliases": [
+        "sweetheart"
+      ]
+    },
+    {
+      "name": "baby",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "sweetheart",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Twinkles",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Rach",
+      "to_entity": "Twinkles",
+      "relation_type": "owns"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[162] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

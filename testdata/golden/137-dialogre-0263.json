@@ -1,0 +1,45 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "wank",
+      "content": "wank and honey are married.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "honey",
+      "content": "honey and wank are married.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "wank",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "honey",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "wank",
+      "to_entity": "honey",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "honey",
+      "to_entity": "wank",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[263] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

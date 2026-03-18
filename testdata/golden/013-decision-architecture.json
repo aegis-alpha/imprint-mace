@@ -1,0 +1,35 @@
+{
+  "facts": [
+    {
+      "fact_type": "decision",
+      "subject": "API gateway",
+      "content": "The API gateway will be written in Rust.",
+      "confidence": 0.95
+    },
+    {
+      "fact_type": "decision",
+      "subject": "backend",
+      "content": "Backend services are written in Python.",
+      "confidence": 0.9
+    },
+    {
+      "fact_type": "decision",
+      "subject": "frontend",
+      "content": "Frontend uses React with TypeScript.",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "technical"
+  }
+}

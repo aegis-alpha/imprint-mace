@@ -1,0 +1,2 @@
+User: Production went down at 3am last night. Root cause was a memory leak in the payment service. It took 4 hours to restore.
+Assistant: 3am outage, payment service memory leak, 4-hour recovery.

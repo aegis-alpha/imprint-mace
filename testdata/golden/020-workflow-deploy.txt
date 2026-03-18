@@ -1,0 +1,2 @@
+User: Deploy procedure is: 1) merge to main, 2) wait for CI green, 3) run db:migrate on staging, 4) smoke test staging, 5) promote to production, 6) monitor for 30 minutes.
+Assistant: Six-step deploy pipeline. Got it.

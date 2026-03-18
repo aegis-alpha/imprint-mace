@@ -1,0 +1,2 @@
+User: We're going with PostgreSQL for the main database. SQLite for local dev and testing.
+Assistant: PostgreSQL for prod, SQLite for dev. Should I set up the schema?

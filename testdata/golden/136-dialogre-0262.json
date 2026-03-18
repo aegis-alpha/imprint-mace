@@ -1,0 +1,33 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Joseph Stalin",
+      "content": "Joseph Stalin is originally from Russian.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Joseph Stalin",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Russian",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Flame Boy",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[262] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

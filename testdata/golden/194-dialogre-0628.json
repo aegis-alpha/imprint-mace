@@ -1,0 +1,81 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Flench",
+      "content": "Flench lives in Minsk.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Lifson",
+      "content": "Lifson lives in Minsk.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Yamaguchi",
+      "content": "Yamaguchi lives in Minsk.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Flench",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Minsk",
+      "entity_type": "location",
+      "aliases": []
+    },
+    {
+      "name": "Yamaguchi",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Lifson",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Flench",
+      "to_entity": "Minsk",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Minsk",
+      "to_entity": "Flench",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Minsk",
+      "to_entity": "Yamaguchi",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Minsk",
+      "to_entity": "Lifson",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Lifson",
+      "to_entity": "Minsk",
+      "relation_type": "located_at"
+    },
+    {
+      "from_entity": "Yamaguchi",
+      "to_entity": "Minsk",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[628] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

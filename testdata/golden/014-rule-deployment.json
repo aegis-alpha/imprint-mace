@@ -1,0 +1,29 @@
+{
+  "facts": [
+    {
+      "fact_type": "rule",
+      "subject": "deployment",
+      "content": "Deployments are never done on Fridays, no exceptions.",
+      "confidence": 1.0
+    },
+    {
+      "fact_type": "rule",
+      "subject": "CI",
+      "content": "Merges to main require passing CI (green build).",
+      "confidence": 0.95
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "technical"
+  }
+}

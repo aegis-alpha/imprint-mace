@@ -1,0 +1,28 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Richard",
+      "content": "Richard holds the title of doctor.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Richard",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "doctor",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "DialogRE train[200] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

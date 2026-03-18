@@ -1,0 +1,34 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Ben",
+      "content": "Ben works at museum.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Ben",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "museum",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Ben",
+      "to_entity": "museum",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[634] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

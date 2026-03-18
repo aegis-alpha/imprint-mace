@@ -1,0 +1,2 @@
+User: I studied computer science at MIT, graduated 2018. Before this job I was at Google for 3 years working on Cloud Spanner.
+Assistant: MIT CS 2018, then Google Cloud Spanner. Impressive background.

@@ -1,0 +1,23 @@
+{
+  "facts": [
+    {
+      "fact_type": "rule",
+      "subject": "PR review",
+      "content": "All pull requests require two approvals instead of one, effective next Monday until the security audit completes (approximately end of April).",
+      "confidence": 0.9
+    }
+  ],
+  "entities": [
+    {
+      "name": "User",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [],
+  "_metadata": {
+    "source": "synthetic",
+    "annotator": "human",
+    "category": "edge_case"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Drake Remore",
+      "content": "Drake Remore works at hospital.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Drake Remore",
+      "content": "Drake Remore holds the title of doctor.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Drake Remore",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "hospital",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "doctor",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Drake Remore",
+      "to_entity": "hospital",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[340] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

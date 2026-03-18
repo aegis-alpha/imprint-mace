@@ -1,0 +1,50 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Nora Tyler Bing",
+      "content": "Nora Tyler Bing works with Euphoria Unbound.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Nora Tyler Bing",
+      "content": "Nora Tyler Bing works with Mistress Bitch.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Nora Tyler Bing",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Euphoria Unbound",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Mistress Bitch",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Nora Tyler Bing",
+      "to_entity": "Euphoria Unbound",
+      "relation_type": "works_on"
+    },
+    {
+      "from_entity": "Nora Tyler Bing",
+      "to_entity": "Mistress Bitch",
+      "relation_type": "works_on"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[460] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

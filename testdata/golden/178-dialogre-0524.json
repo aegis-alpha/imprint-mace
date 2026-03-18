@@ -1,0 +1,45 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Mrs. Knight",
+      "content": "Mrs. Knight holds the title of teacher.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Mrs. Knight",
+      "content": "Mrs. Knight works at school.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Mrs. Knight",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "teacher",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "school",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Mrs. Knight",
+      "to_entity": "school",
+      "relation_type": "located_at"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[524] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

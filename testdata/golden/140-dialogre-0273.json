@@ -1,0 +1,93 @@
+{
+  "facts": [
+    {
+      "fact_type": "bio",
+      "subject": "Gene Lester",
+      "content": "Gene Lester holds the title of database specialist.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Leslie Charleson",
+      "content": "Leslie Charleson works with General Hospital.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Leslie Charleson",
+      "content": "Leslie Charleson holds the title of star.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Joey Tribbiani",
+      "content": "Joey Tribbiani works with Days of Our Life.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "bio",
+      "subject": "Joey Tribbiani",
+      "content": "Joey Tribbiani holds the title of star.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Gene Lester",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "database specialist",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Leslie Charleson",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "General Hospital",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "star",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "Joey Tribbiani",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Days of Our Life",
+      "entity_type": "concept",
+      "aliases": []
+    },
+    {
+      "name": "girl",
+      "entity_type": "concept",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Leslie Charleson",
+      "to_entity": "General Hospital",
+      "relation_type": "works_on"
+    },
+    {
+      "from_entity": "Joey Tribbiani",
+      "to_entity": "Days of Our Life",
+      "relation_type": "works_on"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[273] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}

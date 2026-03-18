@@ -1,0 +1,57 @@
+{
+  "facts": [
+    {
+      "fact_type": "contact",
+      "subject": "Monica",
+      "content": "Monica and Chandler are in a relationship.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Monica",
+      "content": "Monica and Chandler are friends.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Chandler",
+      "content": "Chandler and Monica are in a relationship.",
+      "confidence": 0.85
+    },
+    {
+      "fact_type": "contact",
+      "subject": "Chandler",
+      "content": "Chandler and Monica are friends.",
+      "confidence": 0.85
+    }
+  ],
+  "entities": [
+    {
+      "name": "Monica",
+      "entity_type": "person",
+      "aliases": []
+    },
+    {
+      "name": "Chandler",
+      "entity_type": "person",
+      "aliases": []
+    }
+  ],
+  "relationships": [
+    {
+      "from_entity": "Monica",
+      "to_entity": "Chandler",
+      "relation_type": "related_to"
+    },
+    {
+      "from_entity": "Chandler",
+      "to_entity": "Monica",
+      "relation_type": "related_to"
+    }
+  ],
+  "_metadata": {
+    "source": "DialogRE train[34] (MIT license)",
+    "annotator": "converted from DialogRE annotations",
+    "category": "dialogue"
+  }
+}
