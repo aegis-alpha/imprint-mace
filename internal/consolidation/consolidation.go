@@ -163,8 +163,10 @@ func (c *Consolidator) consolidateCluster(ctx context.Context, facts []model.Fac
 	consolidationID := db.NewID()
 
 	factIDs := make([]string, len(facts))
+	validIDs := make(map[string]bool, len(facts))
 	for i := range facts {
 		factIDs[i] = facts[i].ID
+		validIDs[facts[i].ID] = true
 	}
 
 	cons := &model.Consolidation{
@@ -182,6 +184,12 @@ func (c *Consolidator) consolidateCluster(ctx context.Context, facts []model.Fac
 
 	var fcs []model.FactConnection
 	for _, rc := range raw.Connections {
+		if !validIDs[rc.FactA] || !validIDs[rc.FactB] {
+			c.logger.Warn("skipping connection with invalid fact ID",
+				"fact_a", rc.FactA, "fact_b", rc.FactB,
+				"valid_a", validIDs[rc.FactA], "valid_b", validIDs[rc.FactB])
+			continue
+		}
 		fc := model.FactConnection{
 			ID:              db.NewID(),
 			FactA:           rc.FactA,
@@ -192,7 +200,9 @@ func (c *Consolidator) consolidateCluster(ctx context.Context, facts []model.Fac
 			CreatedAt:       now,
 		}
 		if err := c.store.CreateFactConnection(ctx, &fc); err != nil {
-			return nil, fmt.Errorf("store fact connection: %w", err)
+			c.logger.Warn("failed to store fact connection, skipping",
+				"fact_a", rc.FactA, "fact_b", rc.FactB, "error", err)
+			continue
 		}
 		fcs = append(fcs, fc)
 	}
