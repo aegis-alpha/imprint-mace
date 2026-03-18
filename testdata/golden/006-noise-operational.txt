@@ -1,0 +1,1 @@
+Assistant: I cannot read /home/ubuntu/clawd/HEARTBEAT.md because I do not have access to the workspace files from this execution environment. Since I cannot determine whether anything needs attention, I'll respond with the default.

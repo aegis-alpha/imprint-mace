@@ -384,3 +384,37 @@ The `export` command dumps the entire knowledge base for backup or analysis.
 |--------|--------|----------|
 | `json` | Single file (stdout or `--output=path`) | facts, entities, relationships, consolidations, fact_connections, stats |
 | `csv` | Directory (default: `export/`) | One CSV per table: facts.csv, entities.csv, relationships.csv, consolidations.csv, fact_connections.csv |
+
+---
+
+## 10. Eval Harness
+
+`internal/eval` scores extraction quality against a golden dataset. The `eval` CLI subcommand runs extraction on each golden example, compares the result to the expected output, and reports metrics.
+
+### 10.1 Golden Dataset
+
+Paired files in a directory: `001-foo.txt` (input) + `001-foo.json` (expected output). The JSON follows the same schema as `ExtractionResult` (facts, entities, relationships). Examples with all-empty arrays are noise examples.
+
+### 10.2 Matching
+
+| Category | Strategy |
+|----------|----------|
+| Facts | Composite: `fact_type` exact, `subject` normalized fuzzy, `content` Jaccard similarity (threshold 0.5) |
+| Entities | Alias-aware, case-insensitive name comparison |
+| Relationships | Entity names via entity matcher + `relation_type` exact |
+
+### 10.3 Metrics
+
+| Metric | Description |
+|--------|-------------|
+| Fact F1 | CaRB-style asymmetric P/R/F1 (greedy precision, max-match recall) |
+| Entity F1 | Set-based P/R/F1 with alias-aware matching |
+| Relationship F1 | Set-based P/R/F1 with entity name resolution |
+| NRR | Noise Rejection Rate: fraction of noise inputs producing zero extractions |
+| ECE | Expected Calibration Error (10-bin): measures confidence score accuracy |
+| Brier | Mean squared error of confidence vs correctness |
+| Composite | `0.4*fact_F1 + 0.2*entity_F1 + 0.2*rel_F1 + 0.1*(1-ECE) + 0.1*NRR` |
+
+### 10.4 Output
+
+Table (default) or JSON (`--format=json`). The composite score is a single number (0-1) suitable as an optimization target for automated prompt tuning.

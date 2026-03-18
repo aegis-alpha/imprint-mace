@@ -1,0 +1,3 @@
+Alice: I've decided we're going with Go for Acme. Single binary, no runtime deps.
+Assistant: Makes sense. Should I use the standard cmd/internal layout?
+Alice: Yes, standard Go layout. And use TOML for config -- it supports comments and nested structures.

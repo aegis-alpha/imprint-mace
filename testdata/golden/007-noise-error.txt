@@ -1,0 +1,4 @@
+Error: connection refused to localhost:5432
+Retrying in 5 seconds...
+Error: connection refused to localhost:5432
+Failed after 3 attempts. Exiting.

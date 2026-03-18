@@ -17,20 +17,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aegis-alpha/imprint-mace/internal/api"
 	"github.com/aegis-alpha/imprint-mace/internal/config"
-	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
-	"github.com/aegis-alpha/imprint-mace/internal/update"
 	"github.com/aegis-alpha/imprint-mace/internal/consolidation"
+	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
+	impeval "github.com/aegis-alpha/imprint-mace/internal/eval"
 	"github.com/aegis-alpha/imprint-mace/internal/extraction"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
 	"github.com/aegis-alpha/imprint-mace/internal/ingest"
-	"github.com/aegis-alpha/imprint-mace/internal/api"
 	impmcp "github.com/aegis-alpha/imprint-mace/internal/mcp"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
 	"github.com/aegis-alpha/imprint-mace/internal/transcript"
+	"github.com/aegis-alpha/imprint-mace/internal/update"
 	"github.com/aegis-alpha/imprint-mace/internal/watcher"
 )
 
@@ -72,6 +73,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  mcp                       Start MCP server (stdio transport)")
 		fmt.Fprintln(os.Stderr, "  export [--format=json|csv] [--output=path] Export knowledge base")
 		fmt.Fprintln(os.Stderr, "  context [HINT]            Build context snapshot for system prompt injection")
+		fmt.Fprintln(os.Stderr, "  eval --golden=PATH [--format=json|table] Evaluate extraction quality against golden set")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
 		fmt.Fprintln(os.Stderr, "  version                   Print version and exit")
 		os.Exit(1)
@@ -161,6 +163,21 @@ func main() {
 			hint = strings.Join(args[1:], " ")
 		}
 		runContext(logger, *cfgPath, hint)
+	case "eval":
+		goldenDir, format := "", "table"
+		for _, a := range args[1:] {
+			switch {
+			case strings.HasPrefix(a, "--golden="):
+				goldenDir = a[9:]
+			case strings.HasPrefix(a, "--format="):
+				format = a[9:]
+			}
+		}
+		if goldenDir == "" {
+			fmt.Fprintln(os.Stderr, "Usage: imprint eval --golden=PATH [--format=json|table]")
+			os.Exit(1)
+		}
+		runEval(logger, *cfgPath, goldenDir, format)
 	case "gc":
 		runGC(logger, *cfgPath)
 	case "version":
@@ -934,6 +951,48 @@ func writeServeInfo(addr string) error {
 
 func removeServeInfo() {
 	os.Remove(serveInfoPath()) //nolint:gosec // best-effort cleanup of serve.json
+}
+
+func runEval(logger *slog.Logger, cfgPath, goldenDir, format string) {
+	cfg := loadConfig(logger, cfgPath)
+
+	chain, err := provider.NewChain(cfg.Providers.Extraction)
+	if err != nil {
+		logger.Error("failed to create provider chain", "error", err)
+		os.Exit(1)
+	}
+
+	types := cfg.EffectiveTypes()
+	extractor, err := extraction.New(chain, cfg.Prompts.Extraction, types, logger)
+	if err != nil {
+		logger.Error("failed to create extractor", "error", err)
+		os.Exit(1)
+	}
+
+	examples, err := impeval.LoadGoldenDir(goldenDir)
+	if err != nil {
+		logger.Error("failed to load golden set", "path", goldenDir, "error", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "Loaded %d golden examples from %s\n", len(examples), goldenDir)
+
+	ctx := context.Background()
+	report, err := impeval.Run(ctx, extractor, examples, impeval.DefaultConfig())
+	if err != nil {
+		logger.Error("eval failed", "error", err)
+		os.Exit(1)
+	}
+
+	switch format {
+	case "json":
+		if err := impeval.WriteJSON(os.Stdout, report); err != nil {
+			logger.Error("failed to write JSON report", "error", err)
+			os.Exit(1)
+		}
+	default:
+		impeval.WriteTable(os.Stdout, report)
+	}
 }
 
 func runGC(logger *slog.Logger, cfgPath string) {

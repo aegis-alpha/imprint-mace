@@ -164,6 +164,33 @@ Fact types: `preference`, `decision`, `rule`, `project`, `contact`, `bio`, `cont
 ]
 ```
 
+### GET /relationships
+
+List relationships in the knowledge graph.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `type` | string | no | -- | Filter by relation type |
+| `entity` | string | no | -- | Filter by entity ID (matches from_entity or to_entity) |
+| `limit` | int | no | 50 | Max results |
+
+Relation types: `owns`, `uses`, `works_on`, `depends_on`, `related_to`, `created_by`, `part_of`, `manages`, `located_at`.
+
+**Response (200):**
+
+```json
+[
+  {
+    "id": "01JFC...",
+    "from_entity": "01JFB...",
+    "to_entity": "01JFE...",
+    "relation_type": "works_on",
+    "source_fact": "01JFA...",
+    "created_at": "2026-03-15T14:30:00Z"
+  }
+]
+```
+
 ### PATCH /facts/{id}
 
 Update metadata on an existing fact (confidence, expiry, subject). Does not change the fact content -- use POST /facts/{id}/supersede for that.
@@ -288,6 +315,18 @@ List entities in the knowledge graph.
 
 Returns JSON array of entities.
 
+### imprint_relationships
+
+List relationships in the knowledge graph.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `type` | string | no | Filter by relation type |
+| `entity` | string | no | Filter by entity ID (matches from_entity or to_entity) |
+| `limit` | number | no | Max results (default 50) |
+
+Returns JSON array of relationships.
+
 ### imprint_graph
 
 Get the subgraph around an entity.
@@ -348,6 +387,7 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `serve` | `[--host=H] [--port=P] [--watch=PATH]` | Start HTTP API server. `--watch` starts a file watcher alongside the server. |
 | `mcp` | -- | Start MCP server (stdio transport) |
 | `export` | `[--format=json\|csv] [--output=path]` | Export entire knowledge base |
+| `eval` | `--golden=PATH [--format=json\|table]` | Evaluate extraction quality against a golden dataset |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
 | `version` | -- | Print version and exit |
 
@@ -396,6 +436,12 @@ imprint export --format=csv
 
 # Backfill chunk embeddings
 imprint embed-backfill --chunks
+
+# Evaluate extraction quality against golden set
+imprint eval --golden=testdata/golden/
+
+# Evaluate and output JSON report
+imprint eval --golden=testdata/golden/ --format=json
 
 # Delete expired facts
 imprint gc

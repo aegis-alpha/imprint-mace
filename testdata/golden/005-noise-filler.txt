@@ -1,0 +1,3 @@
+Alice: ok sounds good, let me check
+Assistant: Sure, take your time.
+Alice: alright, back. Where were we?
