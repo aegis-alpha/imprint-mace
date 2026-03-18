@@ -32,7 +32,7 @@ research/
 prompts/session-*
 
 # Test data (golden eval set, generated scripts)
-testdata/
+/testdata/
 tools/scripts/convert-dialogre.py
 tools/scripts/generate-synthetic-golden.py
 
