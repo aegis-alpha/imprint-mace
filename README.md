@@ -275,7 +275,7 @@ priority = 1
 [[providers.extraction]]
 name = "anthropic"
 base_url = "https://api.anthropic.com"
-model = "claude-haiku-4"
+model = "claude-haiku-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 timeout_seconds = 30
 priority = 2
