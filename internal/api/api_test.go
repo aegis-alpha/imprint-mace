@@ -221,6 +221,110 @@ func TestFacts_FilterByType(t *testing.T) {
 	}
 }
 
+// --- GET /relationships ---
+
+func TestRelationships_ListAll(t *testing.T) {
+	h, store := testAPI(t)
+	ctx := context.Background()
+
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e1", Name: "Alice", EntityType: model.EntityPerson, CreatedAt: time.Now(),
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e2", Name: "Acme", EntityType: model.EntityProject, CreatedAt: time.Now(),
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r1", FromEntity: "e1", ToEntity: "e2", RelationType: model.RelWorksOn, CreatedAt: time.Now(),
+	})
+
+	req := httptest.NewRequest("GET", "/relationships", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var rels []model.Relationship
+	if err := json.Unmarshal(w.Body.Bytes(), &rels); err != nil {
+		t.Fatalf("parse JSON: %v", err)
+	}
+	if len(rels) != 1 {
+		t.Errorf("expected 1 relationship, got %d", len(rels))
+	}
+}
+
+func TestRelationships_FilterByType(t *testing.T) {
+	h, store := testAPI(t)
+	ctx := context.Background()
+
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e1", Name: "Alice", EntityType: model.EntityPerson, CreatedAt: time.Now(),
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e2", Name: "Acme", EntityType: model.EntityProject, CreatedAt: time.Now(),
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e3", Name: "Go", EntityType: model.EntityTool, CreatedAt: time.Now(),
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r1", FromEntity: "e1", ToEntity: "e2", RelationType: model.RelWorksOn, CreatedAt: time.Now(),
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r2", FromEntity: "e2", ToEntity: "e3", RelationType: model.RelUses, CreatedAt: time.Now(),
+	})
+
+	req := httptest.NewRequest("GET", "/relationships?type=works_on", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var rels []model.Relationship
+	if err := json.Unmarshal(w.Body.Bytes(), &rels); err != nil {
+		t.Fatalf("parse JSON: %v", err)
+	}
+	if len(rels) != 1 {
+		t.Errorf("expected 1 works_on relationship, got %d", len(rels))
+	}
+}
+
+func TestRelationships_FilterByEntity(t *testing.T) {
+	h, store := testAPI(t)
+	ctx := context.Background()
+
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e1", Name: "Alice", EntityType: model.EntityPerson, CreatedAt: time.Now(),
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e2", Name: "Acme", EntityType: model.EntityProject, CreatedAt: time.Now(),
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e3", Name: "Bob", EntityType: model.EntityPerson, CreatedAt: time.Now(),
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r1", FromEntity: "e1", ToEntity: "e2", RelationType: model.RelWorksOn, CreatedAt: time.Now(),
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r2", FromEntity: "e3", ToEntity: "e2", RelationType: model.RelWorksOn, CreatedAt: time.Now(),
+	})
+
+	req := httptest.NewRequest("GET", "/relationships?entity=e1", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var rels []model.Relationship
+	if err := json.Unmarshal(w.Body.Bytes(), &rels); err != nil {
+		t.Fatalf("parse JSON: %v", err)
+	}
+	if len(rels) != 1 {
+		t.Errorf("expected 1 relationship for e1, got %d", len(rels))
+	}
+}
+
 // --- GET /graph ---
 
 func TestGraph_ReturnsSubgraph(t *testing.T) {

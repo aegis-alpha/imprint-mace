@@ -7,6 +7,7 @@
 //   - GET    /status                      -- database statistics
 //   - GET    /entities                    -- list entities (?type=, ?limit=)
 //   - GET    /facts                       -- list facts (?type=, ?subject=, ?limit=)
+//   - GET    /relationships               -- list relationships (?type=, ?entity=, ?limit=)
 //   - GET    /graph/{id}                  -- entity subgraph (?depth=)
 //   - POST   /admin/reset                 -- wipe DB and recreate schema
 //   - DELETE /admin/facts                 -- delete facts by source pattern
@@ -56,6 +57,7 @@ func NewHandlerWithBuilder(engine *imprint.Engine, store db.Store, querier *quer
 	h.mux.HandleFunc("/status", h.methodGET(h.handleStatus))
 	h.mux.HandleFunc("/entities", h.methodGET(h.handleEntities))
 	h.mux.HandleFunc("/facts", h.methodGET(h.handleFacts))
+	h.mux.HandleFunc("/relationships", h.methodGET(h.handleRelationships))
 	h.mux.HandleFunc("/graph/", h.methodGET(h.handleGraph))
 	h.mux.HandleFunc("/query", h.methodGET(h.handleQuery))
 	h.mux.HandleFunc("/ingest", h.methodPOST(h.handleIngest))
@@ -167,6 +169,32 @@ func (h *Handler) handleFacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, facts)
+}
+
+func (h *Handler) handleRelationships(w http.ResponseWriter, r *http.Request) {
+	filter := db.RelFilter{Limit: 50}
+	if v := r.URL.Query().Get("type"); v != "" {
+		filter.RelationType = v
+	}
+	if v := r.URL.Query().Get("entity"); v != "" {
+		filter.EntityID = v
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.Limit = n
+		}
+	}
+	rels, err := h.store.ListRelationships(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("list relationships failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "list relationships failed")
+		return
+	}
+	if rels == nil {
+		writeJSON(w, http.StatusOK, []struct{}{})
+		return
+	}
+	writeJSON(w, http.StatusOK, rels)
 }
 
 func (h *Handler) handleGraph(w http.ResponseWriter, r *http.Request) {

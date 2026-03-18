@@ -358,6 +358,76 @@ func TestGraphTool_DepthClamp(t *testing.T) {
 	}
 }
 
+// --- imprint_relationships ---
+
+func TestRelationshipsTool_ListAll(t *testing.T) {
+	srv, store := testStore(t)
+	ctx := context.Background()
+
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e1", Name: "Alice", EntityType: model.EntityPerson,
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e2", Name: "Acme", EntityType: model.EntityProject,
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r1", FromEntity: "e1", ToEntity: "e2", RelationType: model.RelWorksOn,
+	})
+
+	req := callTool(t, "imprint_relationships", map[string]any{})
+	result, err := srv.handleRelationships(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := resultText(t, result)
+	var rels []model.Relationship
+	if err := json.Unmarshal([]byte(text), &rels); err != nil {
+		t.Fatalf("failed to parse relationships JSON: %v", err)
+	}
+	if len(rels) != 1 {
+		t.Errorf("expected 1 relationship, got %d", len(rels))
+	}
+}
+
+func TestRelationshipsTool_FilterByType(t *testing.T) {
+	srv, store := testStore(t)
+	ctx := context.Background()
+
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e1", Name: "Alice", EntityType: model.EntityPerson,
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e2", Name: "Acme", EntityType: model.EntityProject,
+	})
+	store.CreateEntity(ctx, &model.Entity{
+		ID: "e3", Name: "Go", EntityType: model.EntityTool,
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r1", FromEntity: "e1", ToEntity: "e2", RelationType: model.RelWorksOn,
+	})
+	store.CreateRelationship(ctx, &model.Relationship{
+		ID: "r2", FromEntity: "e2", ToEntity: "e3", RelationType: model.RelUses,
+	})
+
+	req := callTool(t, "imprint_relationships", map[string]any{
+		"type": "works_on",
+	})
+	result, err := srv.handleRelationships(ctx, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	text := resultText(t, result)
+	var rels []model.Relationship
+	if err := json.Unmarshal([]byte(text), &rels); err != nil {
+		t.Fatalf("failed to parse relationships JSON: %v", err)
+	}
+	if len(rels) != 1 {
+		t.Errorf("expected 1 works_on relationship, got %d", len(rels))
+	}
+}
+
 // --- imprint_query ---
 
 type mockQuerySender struct {

@@ -135,6 +135,22 @@ func NewWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Queri
 		s.handleSupersedeFact,
 	)
 
+	s.mcp.AddTool(
+		mcp.NewTool("imprint_relationships",
+			mcp.WithDescription("List relationships in the knowledge graph, optionally filtered by type or entity."),
+			mcp.WithString("type",
+				mcp.Description("Filter by relation type (owns, uses, works_on, depends_on, related_to, created_by, part_of, manages, located_at)"),
+			),
+			mcp.WithString("entity",
+				mcp.Description("Filter by entity ID (matches from_entity or to_entity)"),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("Max results (default 50)"),
+			),
+		),
+		s.handleRelationships,
+	)
+
 	if builder != nil {
 		s.mcp.AddResource(
 			mcp.NewResource("imprint://context/relevant", "Relevant Context",
@@ -335,6 +351,29 @@ func (s *Server) handleSupersedeFact(ctx context.Context, req mcp.CallToolReques
 	}
 
 	data, _ := json.Marshal(newFact)
+	return mcp.NewToolResultText(string(data)), nil
+}
+
+func (s *Server) handleRelationships(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	filter := db.RelFilter{Limit: 50}
+	if v, err := req.RequireString("type"); err == nil && v != "" {
+		filter.RelationType = v
+	}
+	if v, err := req.RequireString("entity"); err == nil && v != "" {
+		filter.EntityID = v
+	}
+	if v, err := req.RequireFloat("limit"); err == nil && v > 0 {
+		filter.Limit = int(v)
+	}
+	rels, err := s.store.ListRelationships(ctx, filter)
+	if err != nil {
+		s.logger.Error("list relationships failed", "error", err)
+		return mcp.NewToolResultError(fmt.Sprintf("list relationships failed: %v", err)), nil
+	}
+	if rels == nil {
+		rels = []model.Relationship{}
+	}
+	data, _ := json.Marshal(rels)
 	return mcp.NewToolResultText(string(data)), nil
 }
 
