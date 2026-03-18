@@ -1,1 +1,0 @@
-Alice: I think Bob mentioned something about switching to Kubernetes, but I'm not sure if that was decided or just an idea he had.

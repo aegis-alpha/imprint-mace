@@ -1,6 +1,0 @@
-Assistant: Performing scheduled health check.
-Checking API endpoint: 200 OK (45ms)
-Checking database connection: OK (12ms)
-Checking Redis: OK (3ms)
-Checking disk space: 67% used
-All systems operational. Next check in 5 minutes.

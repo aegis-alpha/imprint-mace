@@ -1,2 +1,0 @@
-User: We have three AI agents running: Clawd handles customer support, Archie does code review, and Scout monitors infrastructure.
-Assistant: Three agents: Clawd (support), Archie (code review), Scout (infra monitoring).

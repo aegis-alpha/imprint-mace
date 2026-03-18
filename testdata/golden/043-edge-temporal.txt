@@ -1,2 +1,0 @@
-User: Starting next Monday, all PRs need two approvals instead of one. This is temporary until the security audit is complete, probably end of April.
-Assistant: Two-approval requirement starting Monday through end of April.

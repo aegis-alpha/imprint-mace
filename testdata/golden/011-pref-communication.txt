@@ -1,2 +1,0 @@
-User: Don't send me emails. Use Slack for everything. If it's urgent, text me.
-Assistant: Got it -- Slack by default, text for urgent.

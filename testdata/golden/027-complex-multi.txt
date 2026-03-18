@@ -1,2 +1,0 @@
-User: Let me give you the full picture. The project is called Meridian. It's a real-time analytics platform. Written in Go with a React frontend. Deployed on GCP in europe-west1. The team is me, Jake (backend), and Lisa (frontend). Jake owns the ingestion pipeline. Lisa built the dashboard. We use ClickHouse for analytics and Redis for caching. The goal is to process 1M events per second by Q3.
-Assistant: Comprehensive overview received. Meridian: Go+React analytics platform on GCP, team of 3, ClickHouse+Redis, 1M eps target by Q3.

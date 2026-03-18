@@ -1,3 +1,0 @@
-Alice: Can you send the summary to my Telegram? I prefer getting updates there rather than email.
-Assistant: Sure. By the way, Bob from the API team asked about the deployment timeline.
-Alice: Tell him we're targeting end of March. The goal is to have the MVP running on mars by then.

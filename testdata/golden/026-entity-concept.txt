@@ -1,2 +1,0 @@
-User: We use event sourcing for the order system. CQRS separates reads from writes. The saga pattern handles distributed transactions across services.
-Assistant: Event sourcing + CQRS + saga pattern for the order system.

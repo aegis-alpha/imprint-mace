@@ -1,2 +1,0 @@
-User: Our infrastructure: prod-1 and prod-2 are the application servers behind a load balancer. db-primary is the PostgreSQL master, db-replica-1 and db-replica-2 are read replicas. cache-1 runs Redis. All in Hetzner Falkenstein datacenter.
-Assistant: 6 servers total in Hetzner Falkenstein. 2 app, 1 db primary, 2 db replicas, 1 cache.

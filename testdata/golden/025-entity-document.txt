@@ -1,2 +1,0 @@
-User: The architecture is documented in ARCHITECTURE.md. The API spec is in api-spec.yaml. Both live in the docs/ folder of the main repo.
-Assistant: Two key docs: ARCHITECTURE.md and api-spec.yaml in docs/.

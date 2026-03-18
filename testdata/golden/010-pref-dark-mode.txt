@@ -1,2 +1,0 @@
-User: I always want dark mode in every editor. Light themes give me headaches.
-Assistant: Noted. I'll default to dark themes in all suggestions.

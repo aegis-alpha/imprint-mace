@@ -1,2 +1,0 @@
-Assistant: mars is down again. It ran out of memory running local-llm at 27B params.
-Alice: That's the third time this week. Lesson learned -- we need to cap concurrent model loads to 2 max on mars. Also, node-1 should take over inference when mars is overloaded. node-2 depends on node-1 for routing anyway.

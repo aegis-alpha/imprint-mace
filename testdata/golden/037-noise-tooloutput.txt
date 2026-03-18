@@ -1,5 +1,0 @@
-$ kubectl get pods -n production
-NAME                          READY   STATUS    RESTARTS   AGE
-api-7d8f9c6b5-x2k4l          1/1     Running   0          3d
-worker-5c4d3e2f1-m8n7p        1/1     Running   2          5d
-redis-master-0                1/1     Running   0          12d

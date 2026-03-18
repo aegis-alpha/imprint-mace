@@ -1,2 +1,0 @@
-User: The checkout service depends on the inventory API and the payment gateway. If either goes down, checkout fails.
-Assistant: Hard dependencies: checkout -> inventory API, checkout -> payment gateway.

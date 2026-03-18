@@ -1,4 +1,0 @@
-User: hmm let me think... ok so the config file is at /etc/myapp/config.yaml
-Assistant: Got it.
-User: wait no, that's the old path. It's /opt/myapp/config.yaml now.
-Assistant: Updated: /opt/myapp/config.yaml

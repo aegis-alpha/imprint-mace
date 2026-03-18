@@ -1,2 +1,0 @@
-User: Never deploy on Fridays. No exceptions. If CI is red, no merge to main either.
-Assistant: Understood. Friday deploy freeze and green CI required for merges.

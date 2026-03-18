@@ -1,2 +1,0 @@
-User: I vaguely remember someone mentioning that we might switch from AWS to Azure next year, but I could be wrong. It might have been a joke.
-Assistant: Noted as unconfirmed. I won't act on it unless you confirm.

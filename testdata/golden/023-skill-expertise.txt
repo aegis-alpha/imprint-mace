@@ -1,2 +1,0 @@
-User: I'm fluent in Go, Rust, and Python. I also know some Haskell but wouldn't call myself proficient. My team lead, Ana, is the Kubernetes expert.
-Assistant: Your stack: Go, Rust, Python (fluent), Haskell (basic). Ana is the K8s expert.

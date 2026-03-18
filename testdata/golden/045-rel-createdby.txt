@@ -1,2 +1,0 @@
-User: The monitoring dashboard was built by Elena. The alerting rules were written by the SRE team.
-Assistant: Elena built the dashboard, SRE team wrote the alerts.

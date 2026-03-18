@@ -31,6 +31,11 @@ archive/
 research/
 prompts/session-*
 
+# Test data (golden eval set, generated scripts)
+testdata/
+tools/scripts/convert-dialogre.py
+tools/scripts/generate-synthetic-golden.py
+
 # Benchmark results (may contain real data)
 research/benchmarks/results/
 research/benchmarks/results-large/

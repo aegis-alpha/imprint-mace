@@ -1,2 +1,0 @@
-User: Our company name is Nexus Technologies.
-Assistant: Noted.

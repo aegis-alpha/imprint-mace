@@ -1,2 +1,0 @@
-User: Last time we used a NoSQL database for transactional data it was a disaster. Lesson learned: use relational databases for anything with ACID requirements.
-Assistant: Noted. RDBMS for ACID workloads.
