@@ -1,14 +1,8 @@
-import { readFileSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
+import { getImprintURL, checkReachable, setUnreachable } from "../shared/imprint-client";
 
 const MIN_LENGTH = 20;
-const RECHECK_INTERVAL_MS = 60_000;
 const LEARN_THRESHOLD = parseInt(process.env.IMPRINT_FILTER_THRESHOLD || "5", 10);
 const SKIP_RATIO = parseFloat(process.env.IMPRINT_FILTER_SKIP_RATIO || "0.8");
-
-let reachable = false;
-let lastCheckAt = 0;
 
 interface PatternStats {
   total: number;
@@ -45,40 +39,6 @@ function recordResult(pattern: string, factsCount: number): void {
   if (factsCount === 0) stats.empty++;
 }
 
-function getImprintURL(): string {
-  const envURL = process.env.IMPRINT_URL;
-  if (envURL) return envURL;
-
-  try {
-    const infoPath = join(homedir(), ".imprint", "serve.json");
-    const data = JSON.parse(readFileSync(infoPath, "utf-8"));
-    if (data.url) return data.url;
-  } catch {}
-
-  return "http://localhost:8080";
-}
-
-async function checkReachable(url: string): Promise<boolean> {
-  const now = Date.now();
-  if (reachable) return true;
-  if (now - lastCheckAt < RECHECK_INTERVAL_MS) return false;
-  lastCheckAt = now;
-  try {
-    const res = await fetch(`${url}/status`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (res.ok) {
-      reachable = true;
-      return true;
-    }
-  } catch {}
-  console.error(
-    `[imprint-ingest] Imprint not reachable at ${url} -- will retry in ${RECHECK_INTERVAL_MS / 1000}s. ` +
-      `Set IMPRINT_URL env or check that imprint serve is running.`,
-  );
-  return false;
-}
-
 const handler = async (event: any) => {
   const url = getImprintURL();
 
@@ -108,7 +68,7 @@ const handler = async (event: any) => {
   }
 
   void (async () => {
-    if (!(await checkReachable(url))) return;
+    if (!(await checkReachable(url, "imprint-ingest"))) return;
     try {
       const res = await fetch(`${url}/ingest`, {
         method: "POST",
@@ -128,7 +88,7 @@ const handler = async (event: any) => {
       }
     } catch (err: any) {
       if (err?.name !== "AbortError") {
-        reachable = false;
+        setUnreachable();
       }
       console.error("[imprint-ingest] failed to send to Imprint:", err);
     }

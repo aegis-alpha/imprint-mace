@@ -10,8 +10,11 @@
 # Environment variables:
 #   IMPRINT_URL              -- Imprint server URL (overrides auto-discovery)
 #   IMPRINT_QUERY_TIMEOUT    -- Request timeout in seconds (default: 5)
+#   IMPRINT_DEBUG            -- Set to "1" for stderr debug logging
 
 set -euo pipefail
+
+debug() { [ "${IMPRINT_DEBUG:-}" = "1" ] && echo "[imprint-hook] $*" >&2 || true; }
 
 # Drain stdin (Gemini CLI sends SessionStart JSON; we don't need it)
 timeout 1 cat > /dev/null 2>/dev/null || true
@@ -44,19 +47,24 @@ discover_url() {
 }
 
 URL=$(discover_url)
+debug "using URL: $URL"
 
 if ! curl -sf --max-time 3 "${URL}/status" > /dev/null 2>&1; then
+  debug "Imprint not reachable at $URL"
   echo '{}'
   exit 0
 fi
 
+debug "calling /context"
 RESPONSE=$(curl -sf --max-time "$TIMEOUT" "${URL}/context" 2>/dev/null || true)
 
 if [ -z "$RESPONSE" ]; then
+  debug "empty response from /context"
   echo '{}'
   exit 0
 fi
 
+debug "got response (${#RESPONSE} bytes)"
 if command -v jq > /dev/null 2>&1; then
   CONTEXT=$(echo "$RESPONSE" | jq -r '.context // empty')
   if [ -z "$CONTEXT" ]; then

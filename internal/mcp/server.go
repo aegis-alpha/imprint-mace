@@ -169,7 +169,10 @@ func NewWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Queri
 	return s
 }
 
-func (s *Server) Run(ctx context.Context) error {
+// Run starts the MCP server on stdin/stdout.
+// ctx is accepted for interface compatibility but not used --
+// mcp-go ServeStdio does not support context cancellation.
+func (s *Server) Run(_ context.Context) error {
 	return server.ServeStdio(s.mcp)
 }
 

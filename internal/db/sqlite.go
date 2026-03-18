@@ -76,14 +76,11 @@ func (s *SQLiteStore) migrate() error {
 func splitMigrationStatements(sql string) []string {
 	var stmts []string
 	var current strings.Builder
-	inComment := false
 	for _, line := range strings.Split(sql, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "--") {
-			inComment = false
 			continue
 		}
-		_ = inComment
 		current.WriteString(line)
 		current.WriteString("\n")
 		if strings.HasSuffix(trimmed, ";") {

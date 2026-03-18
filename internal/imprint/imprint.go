@@ -93,8 +93,8 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 	}
 
 	if o.lineStart > 0 {
-		lr := [2]int{o.lineStart, o.lineEnd}
 		for i := range extracted.Facts {
+			lr := [2]int{o.lineStart, o.lineEnd}
 			extracted.Facts[i].Source.LineRange = &lr
 		}
 	}
