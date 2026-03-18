@@ -74,6 +74,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  export [--format=json|csv] [--output=path] Export knowledge base")
 		fmt.Fprintln(os.Stderr, "  context [HINT]            Build context snapshot for system prompt injection")
 		fmt.Fprintln(os.Stderr, "  eval --golden=PATH [--format=json|table] Evaluate extraction quality against golden set")
+		fmt.Fprintln(os.Stderr, "  eval generate [--output=PATH]           Generate built-in golden eval dataset (default: testdata/golden/)")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
 		fmt.Fprintln(os.Stderr, "  version                   Print version and exit")
 		os.Exit(1)
@@ -164,6 +165,16 @@ func main() {
 		}
 		runContext(logger, *cfgPath, hint)
 	case "eval":
+		if len(args) > 1 && args[1] == "generate" {
+			outputDir := "testdata/golden"
+			for _, a := range args[2:] {
+				if strings.HasPrefix(a, "--output=") {
+					outputDir = a[9:]
+				}
+			}
+			runEvalGenerate(logger, outputDir)
+			break
+		}
 		goldenDir, format := "", "table"
 		for _, a := range args[1:] {
 			switch {
@@ -175,6 +186,7 @@ func main() {
 		}
 		if goldenDir == "" {
 			fmt.Fprintln(os.Stderr, "Usage: imprint eval --golden=PATH [--format=json|table]")
+			fmt.Fprintln(os.Stderr, "       imprint eval generate [--output=PATH]")
 			os.Exit(1)
 		}
 		runEval(logger, *cfgPath, goldenDir, format)
@@ -951,6 +963,16 @@ func writeServeInfo(addr string) error {
 
 func removeServeInfo() {
 	os.Remove(serveInfoPath()) //nolint:gosec // best-effort cleanup of serve.json
+}
+
+func runEvalGenerate(logger *slog.Logger, outputDir string) {
+	result, err := impeval.Generate(outputDir)
+	if err != nil {
+		logger.Error("failed to generate golden set", "error", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Generated %d golden examples (%d positive, %d noise) in %s/\n",
+		result.Total, result.Positive, result.Noise, result.Dir)
 }
 
 func runEval(logger *slog.Logger, cfgPath, goldenDir, format string) {

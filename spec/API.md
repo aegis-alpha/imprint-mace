@@ -388,6 +388,7 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `mcp` | -- | Start MCP server (stdio transport) |
 | `export` | `[--format=json\|csv] [--output=path]` | Export entire knowledge base |
 | `eval` | `--golden=PATH [--format=json\|table]` | Evaluate extraction quality against a golden dataset |
+| `eval generate` | `[--output=PATH]` | Generate built-in golden eval dataset (default: `testdata/golden/`) |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
 | `version` | -- | Print version and exit |
 
@@ -436,6 +437,10 @@ imprint export --format=csv
 
 # Backfill chunk embeddings
 imprint embed-backfill --chunks
+
+# Generate the built-in golden eval dataset
+imprint eval generate
+imprint eval generate --output=./my-eval-data/
 
 # Evaluate extraction quality against golden set
 imprint eval --golden=testdata/golden/

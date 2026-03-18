@@ -335,3 +335,64 @@ func TestLoadGoldenDirEmpty(t *testing.T) {
 		t.Error("expected error for empty dir")
 	}
 }
+
+// --- Generate ---
+
+func TestGenerate(t *testing.T) {
+	dir := t.TempDir()
+	result, err := Generate(dir)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if result.Total == 0 {
+		t.Fatal("Generate produced 0 examples")
+	}
+	if result.Positive == 0 {
+		t.Error("Generate produced 0 positive examples")
+	}
+	if result.Noise == 0 {
+		t.Error("Generate produced 0 noise examples")
+	}
+	if result.Positive+result.Noise != result.Total {
+		t.Errorf("positive(%d) + noise(%d) != total(%d)", result.Positive, result.Noise, result.Total)
+	}
+
+	examples, err := LoadGoldenDir(dir)
+	if err != nil {
+		t.Fatalf("LoadGoldenDir after Generate: %v", err)
+	}
+	if len(examples) != result.Total {
+		t.Errorf("loaded %d examples, generated %d", len(examples), result.Total)
+	}
+}
+
+func TestGenerateRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Generate(dir)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	examples, err := LoadGoldenDir(dir)
+	if err != nil {
+		t.Fatalf("LoadGoldenDir: %v", err)
+	}
+
+	positiveCount, noiseCount := 0, 0
+	for _, ex := range examples {
+		if ex.Expected.IsNoise() {
+			noiseCount++
+		} else {
+			positiveCount++
+			if len(ex.Expected.Facts) == 0 {
+				t.Errorf("positive example %q has no facts", ex.Name)
+			}
+		}
+	}
+	if positiveCount < 20 {
+		t.Errorf("too few positive examples: %d, want >= 20", positiveCount)
+	}
+	if noiseCount < 10 {
+		t.Errorf("too few noise examples: %d, want >= 10", noiseCount)
+	}
+}

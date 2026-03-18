@@ -393,7 +393,9 @@ The `export` command dumps the entire knowledge base for backup or analysis.
 
 ### 10.1 Golden Dataset
 
-Paired files in a directory: `001-foo.txt` (input) + `001-foo.json` (expected output). The JSON follows the same schema as `ExtractionResult` (facts, entities, relationships). Examples with all-empty arrays are noise examples.
+`imprint eval generate` writes the built-in golden dataset to disk (default: `testdata/golden/`). The dataset contains 42 examples (30 positive, 12 noise) covering all 12 fact types, 9 entity types, 9 relationship types, and common noise patterns (cron output, stack traces, CI logs, meta-conversation, tool output).
+
+Paired files in a directory: `001-foo.txt` (input) + `001-foo.json` (expected output). The JSON follows the same schema as `ExtractionResult` (facts, entities, relationships). Examples with all-empty arrays are noise examples. Users can add their own examples to the same directory for domain-specific evaluation.
 
 ### 10.2 Matching
 
