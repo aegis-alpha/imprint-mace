@@ -204,12 +204,12 @@ func WriteJSON(w io.Writer, r *Report) error {
 
 func factsToGolden(facts []model.Fact) []GoldenFact {
 	out := make([]GoldenFact, len(facts))
-	for i, f := range facts {
+	for i := range facts {
 		out[i] = GoldenFact{
-			FactType:   string(f.FactType),
-			Subject:    f.Subject,
-			Content:    f.Content,
-			Confidence: f.Confidence,
+			FactType:   string(facts[i].FactType),
+			Subject:    facts[i].Subject,
+			Content:    facts[i].Content,
+			Confidence: facts[i].Confidence,
 		}
 	}
 	return out

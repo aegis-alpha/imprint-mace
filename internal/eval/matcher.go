@@ -45,7 +45,7 @@ func collapseWhitespace(s string) string {
 // FactMatchScore returns a score in [0, 1] for how well system matches gold.
 // Uses composite matching: type exact, subject fuzzy, content Jaccard.
 func FactMatchScore(sys, gold GoldenFact) float64 {
-	if strings.ToLower(sys.FactType) != strings.ToLower(gold.FactType) {
+	if !strings.EqualFold(sys.FactType, gold.FactType) {
 		return 0
 	}
 
@@ -62,7 +62,7 @@ func FactMatchScore(sys, gold GoldenFact) float64 {
 // FactMatchScoreWithEmbeddings uses embedding cosine similarity for content
 // instead of Jaccard. Returns 0 if type doesn't match.
 func FactMatchScoreWithEmbeddings(sys, gold GoldenFact, sysEmb, goldEmb []float32) float64 {
-	if strings.ToLower(sys.FactType) != strings.ToLower(gold.FactType) {
+	if !strings.EqualFold(sys.FactType, gold.FactType) {
 		return 0
 	}
 

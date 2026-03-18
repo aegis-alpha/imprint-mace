@@ -36,9 +36,9 @@ func ScoreFacts(system, gold []GoldenFact, matchThreshold float64) CategoryScore
 	}
 
 	matrix := make([][]float64, len(system))
-	for i := range system {
+	for i := 0; i < len(system); i++ {
 		matrix[i] = make([]float64, len(gold))
-		for j := range gold {
+		for j := 0; j < len(gold); j++ {
 			matrix[i][j] = FactMatchScore(system[i], gold[j])
 		}
 	}
@@ -299,10 +299,11 @@ func ScoreCalibration(samples []CalibrationSample) CalibrationResult {
 		if idx < 0 {
 			idx = 0
 		}
-		bins[idx].Count++
-		bins[idx].AvgConf += s.Confidence
+		b := &bins[idx] //nolint:gosec // idx is bounds-checked above
+		b.Count++
+		b.AvgConf += s.Confidence
 		if s.Correct {
-			bins[idx].Accuracy++
+			b.Accuracy++
 		}
 	}
 
