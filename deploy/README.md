@@ -16,7 +16,7 @@ docker-compose up -d
 
 1. **`.env`** -- API keys (GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY). At least one is required.
 2. **`config.toml`** -- provider chains, consolidation settings, embedding config. The example uses Google Gemini as primary with OpenAI and Anthropic as fallbacks. Edit to match your API keys.
-3. **`docker-compose up -d`** -- starts Imprint + Watchtower (auto-updates from ghcr.io)
+3. **`docker-compose up -d`** -- starts Imprint (set up Dockcheck separately for auto-updates, see below)
 
 Both `config.toml` and `.env` must exist before running docker-compose. If `config.toml` is missing, Docker creates an empty directory instead of a file and Imprint will fail to start.
 
@@ -46,9 +46,30 @@ Prompt files (extraction, consolidation, query) are baked into the image at `/et
 
 ## Auto-update
 
-Watchtower checks ghcr.io every 5 minutes. The update cycle:
+[Dockcheck](https://github.com/mag37/dockcheck) replaces Watchtower (archived Dec 2025). Dockcheck is a bash script that checks image digests without pulling, then updates compose services.
 
-push to main -> CI builds Docker image -> push to ghcr.io:main -> Watchtower pulls -> container restart
+### Install
+
+```bash
+# Dependencies: bash, curl, jq, regctl
+# Install regctl (required for digest checks)
+curl -sL https://github.com/regclient/regclient/releases/latest/download/regctl-linux-amd64 \
+  -o /usr/local/bin/regctl && chmod +x /usr/local/bin/regctl
+
+# Install dockcheck
+curl -sL https://raw.githubusercontent.com/mag37/dockcheck/main/dockcheck.sh \
+  -o /usr/local/bin/dockcheck.sh && chmod +x /usr/local/bin/dockcheck.sh
+```
+
+### Cron (check every 5 minutes, auto-update)
+
+```bash
+*/5 * * * * /usr/local/bin/dockcheck.sh -a -d /path/to/deploy >> /var/log/dockcheck.log 2>&1
+```
+
+The update cycle:
+
+push to main -> CI builds Docker image -> push to ghcr.io:main -> cron runs dockcheck -> container restart
 
 ## Migration / Bulk Ingest
 

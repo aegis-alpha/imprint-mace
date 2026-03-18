@@ -733,6 +733,10 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"(test)", "test"},
 		{"", ""},
 		{"???", ""},
+		{"path/to/file", "pathtofile"},
+		{"~user home", "user home"},
+		{"key=val&other=2", "keyvalother2"},
+		{"/usr/local/bin", "usrlocalbin"},
 	}
 	for _, tt := range tests {
 		got := fts.SanitizeQuery(tt.input)

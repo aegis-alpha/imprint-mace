@@ -60,7 +60,7 @@ jobs:
           govulncheck ./...
 
       - name: Secret scan
-        uses: trufflesecurity/trufflehog@v3.88.0
+        uses: trufflesecurity/trufflehog@v3.93.8
         with:
           extra_args: --only-verified
 
