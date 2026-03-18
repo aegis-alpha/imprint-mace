@@ -51,6 +51,7 @@ func TestMigrate_SplitStatements(t *testing.T) {
 		{"004_embedding_model_fts.sql", 2},
 		{"005_transcripts.sql", 5},
 		{"006_chunks_fts.sql", 1},
+		{"007_supersede_reason.sql", 2},
 	}
 
 	for _, tc := range cases {
@@ -1507,9 +1508,34 @@ func TestSupersedeRealtimeBySession(t *testing.T) {
 
 	facts, _ := store.ListFacts(ctx, FactFilter{})
 	for _, f := range facts {
-		if f.Source.TranscriptFile == "realtime:sess-1" && f.SupersededBy != "batch-replaced" {
-			t.Errorf("fact %s: superseded_by = %q, want %q", f.ID, f.SupersededBy, "batch-replaced")
+		if f.Source.TranscriptFile == "realtime:sess-1" {
+			if f.SupersedeReason != "batch-replaced" {
+				t.Errorf("fact %s: supersede_reason = %q, want %q", f.ID, f.SupersedeReason, "batch-replaced")
+			}
+			if f.SupersededBy != "" {
+				t.Errorf("fact %s: superseded_by = %q, want empty (no sentinel)", f.ID, f.SupersededBy)
+			}
 		}
+	}
+}
+
+func TestSupersedeRealtimeBySession_FKChecksStayEnabled(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	store.CreateFact(ctx, &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "realtime:fk-test"},
+		FactType: model.FactDecision, Content: "fk test fact",
+		Confidence: 0.8, CreatedAt: now,
+	})
+
+	store.SupersedeRealtimeBySession(ctx, "fk-test")
+
+	var fkEnabled int
+	store.RawDB().QueryRow("PRAGMA foreign_keys").Scan(&fkEnabled)
+	if fkEnabled != 1 {
+		t.Errorf("FK checks disabled after SupersedeRealtimeBySession: foreign_keys = %d", fkEnabled)
 	}
 }
 

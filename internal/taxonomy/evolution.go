@@ -42,7 +42,7 @@ type Evolver struct {
 
 // NewEvolver creates an Evolver. It reads and renders the prompt template.
 func NewEvolver(sender Sender, store db.Store, sqlDB *sql.DB, templatePath string, types config.TypesConfig, logger *slog.Logger) (*Evolver, error) {
-	raw, err := os.ReadFile(templatePath)
+	raw, err := os.ReadFile(templatePath) //nolint:gosec // template path from config, not user input
 	if err != nil {
 		return nil, fmt.Errorf("read taxonomy review prompt %s: %w", templatePath, err)
 	}
@@ -426,7 +426,9 @@ func (e *Evolver) EffectiveTypesWithProposals(ctx context.Context, base config.T
 			var rt struct {
 				RenameTo string `json:"rename_to"`
 			}
-			json.Unmarshal([]byte(p.Definition), &rt)
+			if err := json.Unmarshal([]byte(p.Definition), &rt); err != nil {
+				return config.TypesConfig{}, fmt.Errorf("unmarshal rename definition for %s: %w", p.TypeName, err)
+			}
 			if rt.RenameTo != "" {
 				renameType(&result, p.TypeCategory, p.TypeName, rt.RenameTo)
 			}
@@ -438,7 +440,7 @@ func (e *Evolver) EffectiveTypesWithProposals(ctx context.Context, base config.T
 
 func parseDefinition(defJSON string) config.TypeDef {
 	var td config.TypeDef
-	json.Unmarshal([]byte(defJSON), &td)
+	_ = json.Unmarshal([]byte(defJSON), &td) //nolint:errcheck // best-effort parse; zero-value TypeDef is safe
 	return td
 }
 

@@ -41,7 +41,7 @@ type Consolidator struct {
 // clusterThreshold controls the cosine similarity threshold for grouping
 // facts into clusters before sending them to the LLM.
 func New(sender Sender, store db.Store, templatePath string, types config.TypesConfig, clusterThreshold float64, logger *slog.Logger) (*Consolidator, error) {
-	raw, err := os.ReadFile(templatePath)
+	raw, err := os.ReadFile(templatePath) //nolint:gosec // template path from config, not user input
 	if err != nil {
 		return nil, fmt.Errorf("read prompt template %s: %w", templatePath, err)
 	}

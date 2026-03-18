@@ -104,7 +104,7 @@ func (b *BatchAdapter) ProcessDir(ctx context.Context, dir string) (*Result, err
 // processFile reads, hashes, dedup-checks, chunks, registers transcript, extracts, and stores.
 // Returns true if the file was processed, false if skipped (already ingested).
 func (b *BatchAdapter) processFile(ctx context.Context, dir, path string, result *Result) (bool, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path from trusted ingest directory, not user input
 	if err != nil {
 		return false, fmt.Errorf("read file: %w", err)
 	}

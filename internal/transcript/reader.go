@@ -9,7 +9,7 @@ import (
 // ReadContext reads lines [lineStart, lineEnd] from filePath (1-based, inclusive)
 // and includes contextLines extra lines before and after.
 func ReadContext(filePath string, lineStart, lineEnd, contextLines int) (string, error) {
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) //nolint:gosec // path from trusted DB, not user input
 	if err != nil {
 		return "", fmt.Errorf("read transcript: %w", err)
 	}

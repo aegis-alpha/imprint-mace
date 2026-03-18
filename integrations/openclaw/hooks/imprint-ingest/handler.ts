@@ -114,6 +114,7 @@ const handler = async (event: any) => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: content, source }),
+        signal: AbortSignal.timeout(10_000),
       });
       if (res.ok) {
         try {
@@ -125,8 +126,10 @@ const handler = async (event: any) => {
       } else {
         recordResult(pattern, 0);
       }
-    } catch (err) {
-      reachable = false;
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        reachable = false;
+      }
       console.error("[imprint-ingest] failed to send to Imprint:", err);
     }
   })();

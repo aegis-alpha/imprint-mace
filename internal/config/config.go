@@ -223,7 +223,7 @@ func (c *Config) EffectiveTypes() TypesConfig {
 }
 
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path from CLI flag or env, not user input
 	if err != nil {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}

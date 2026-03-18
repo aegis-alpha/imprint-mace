@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/db"
+	"github.com/aegis-alpha/imprint-mace/internal/fts"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 )
@@ -66,7 +67,7 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 	}
 
 	if hint != "" {
-		sanitized := sanitizeFTS5Query(hint)
+		sanitized := fts.SanitizeQuery(hint)
 		if sanitized != "" {
 			results, err := b.store.SearchByText(ctx, sanitized, 10)
 			if err != nil {
@@ -83,7 +84,7 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 	}
 
 	if b.config.IncludePreferences {
-		prefs, err := b.store.ListFacts(ctx, db.FactFilter{FactType: "preference"})
+		prefs, err := b.store.ListFacts(ctx, db.FactFilter{FactType: "preference", Limit: b.config.MaxFacts})
 		if err != nil {
 			b.logger.Warn("list preferences failed", "error", err)
 		} else {
@@ -92,7 +93,7 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 	}
 
 	cutoff := time.Now().UTC().Add(-time.Duration(b.config.RecentHours) * time.Hour)
-	recentFacts, err := b.store.ListFacts(ctx, db.FactFilter{CreatedAfter: &cutoff})
+	recentFacts, err := b.store.ListFacts(ctx, db.FactFilter{CreatedAfter: &cutoff, Limit: b.config.MaxFacts})
 	if err != nil {
 		b.logger.Warn("list recent facts failed", "error", err)
 	} else {
@@ -154,19 +155,3 @@ func dedupAgainst(facts []model.Fact, seen map[string]bool) []model.Fact {
 	return result
 }
 
-// sanitizeFTS5Query removes characters that are special in FTS5 syntax.
-// Duplicated from internal/query/ to avoid coupling between packages.
-func sanitizeFTS5Query(q string) string {
-	replacer := strings.NewReplacer(
-		"?", "", "!", "", ".", "", ",", "", ";", "",
-		":", "", "'", "", "\"", "", "(", "", ")", "",
-		"*", "", "+", "", "-", "", "^", "",
-		"{", "", "}", "", "[", "", "]", "",
-	)
-	cleaned := replacer.Replace(q)
-	words := strings.Fields(cleaned)
-	if len(words) == 0 {
-		return ""
-	}
-	return strings.Join(words, " ")
-}

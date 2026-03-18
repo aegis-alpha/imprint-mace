@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/db"
+	"github.com/aegis-alpha/imprint-mace/internal/fts"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 )
@@ -137,7 +138,7 @@ func (q *Querier) retrieve(ctx context.Context, question string, embedding []flo
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		sanitized := sanitizeFTS5Query(question)
+		sanitized := fts.SanitizeQuery(question)
 		if sanitized == "" {
 			return
 		}
@@ -152,7 +153,7 @@ func (q *Querier) retrieve(ctx context.Context, question string, embedding []flo
 	}()
 	go func() {
 		defer wg.Done()
-		sanitized := sanitizeFTS5Query(question)
+		sanitized := fts.SanitizeQuery(question)
 		if sanitized == "" {
 			return
 		}
@@ -177,21 +178,6 @@ func (q *Querier) retrieve(ctx context.Context, question string, embedding []flo
 	return r
 }
 
-// sanitizeFTS5Query removes characters that are special in FTS5 syntax.
-func sanitizeFTS5Query(q string) string {
-	replacer := strings.NewReplacer(
-		"?", "", "!", "", ".", "", ",", "", ";", "",
-		":", "", "'", "", "\"", "", "(", "", ")", "",
-		"*", "", "+", "", "-", "", "^", "",
-		"{", "", "}", "", "[", "", "]", "",
-	)
-	cleaned := replacer.Replace(q)
-	words := strings.Fields(cleaned)
-	if len(words) == 0 {
-		return ""
-	}
-	return strings.Join(words, " ")
-}
 
 // retrieveByGraph extracts entity names from the question by word matching,
 // looks them up, and traverses the graph for connected facts.
@@ -495,7 +481,7 @@ func readSourceContext(fact model.Fact, transcriptDir string) (string, error) {
 // readContextLines reads lines [start, end] (1-based inclusive) from a file
 // with contextLines extra lines before and after.
 func readContextLines(filePath string, start, end, contextLines int) (string, error) {
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(filePath) //nolint:gosec // path from trusted DB, not user input
 	if err != nil {
 		return "", fmt.Errorf("read file: %w", err)
 	}

@@ -26,7 +26,6 @@ linters:
         - (*database/sql.Tx).Rollback
         - (*net.Listener).Close
         - (net/http.ResponseWriter).Write
-        - encoding/json.Unmarshal
         - (*database/sql.DB).ExecContext
         - fmt.Fprint
         - fmt.Fprintf
@@ -44,12 +43,10 @@ linters:
     gosec:
       excludes:
         - G101
-        - G104
         - G114
         - G115
         - G202
         - G301
-        - G304
         - G306
 
   exclusions:
@@ -58,6 +55,7 @@ linters:
         linters:
           - errcheck
           - gocritic
+          - gosec
       - text: "Error return value of .*(Close|close).*is not checked"
         linters:
           - errcheck

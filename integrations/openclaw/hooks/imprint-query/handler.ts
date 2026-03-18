@@ -89,6 +89,7 @@ const handler = async (event: any) => {
       console.warn(`[imprint-query] /context timed out after ${timeoutMs}ms`);
     } else {
       console.warn("[imprint-query] /context failed:", err);
+      reachable = false;
     }
   }
 };

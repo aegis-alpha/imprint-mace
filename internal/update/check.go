@@ -64,7 +64,7 @@ func cacheFilePath() string {
 }
 
 func readCache(path string) (*cachedCheck, bool) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // cache file path from XDG, not user input
 	if err != nil {
 		return nil, false
 	}

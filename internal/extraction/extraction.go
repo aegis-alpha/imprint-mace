@@ -43,7 +43,7 @@ type Extractor struct {
 // renders it with the given types (D18). The rendered prompt is reused
 // for every Extract call.
 func New(sender Sender, templatePath string, types config.TypesConfig, logger *slog.Logger) (*Extractor, error) {
-	raw, err := os.ReadFile(templatePath)
+	raw, err := os.ReadFile(templatePath) //nolint:gosec // template path from config, not user input
 	if err != nil {
 		return nil, fmt.Errorf("read prompt template %s: %w", templatePath, err)
 	}

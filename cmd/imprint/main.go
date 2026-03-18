@@ -137,7 +137,7 @@ func main() {
 			case strings.HasPrefix(a, "--host="):
 				hostFlag = a[7:]
 			case strings.HasPrefix(a, "--port="):
-				fmt.Sscanf(a[7:], "%d", &portFlag)
+				fmt.Sscanf(a[7:], "%d", &portFlag) //nolint:gosec // best-effort parse; zero portFlag triggers auto-port
 			case strings.HasPrefix(a, "--watch="):
 				watchFlag = a[8:]
 			}
@@ -691,7 +691,7 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		<-sigCh
 		logger.Info("shutting down HTTP API server")
 		removeServeInfo()
-		ln.Close()
+		ln.Close() //nolint:gosec // shutdown path; process exits immediately after
 		os.Exit(0)
 	}()
 
@@ -933,7 +933,7 @@ func writeServeInfo(addr string) error {
 }
 
 func removeServeInfo() {
-	os.Remove(serveInfoPath())
+	os.Remove(serveInfoPath()) //nolint:gosec // best-effort cleanup of serve.json
 }
 
 func runGC(logger *slog.Logger, cfgPath string) {

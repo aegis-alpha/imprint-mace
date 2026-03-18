@@ -5,8 +5,7 @@
 # Calls GET /context on the Imprint HTTP API and returns the result
 # as additional_context for the agent's initial system context.
 #
-# Requires: curl
-# Optional: jq (for robust JSON escaping; falls back to sed)
+# Requires: curl, jq
 #
 # Environment variables:
 #   IMPRINT_URL              -- Imprint server URL (overrides auto-discovery)
@@ -15,7 +14,13 @@
 set -euo pipefail
 
 # Drain stdin (Cursor sends session JSON on stdin; we don't need it)
-cat > /dev/null
+timeout 1 cat > /dev/null 2>/dev/null || true
+
+if ! command -v jq > /dev/null 2>&1; then
+  echo "[imprint-hook] jq not found -- context hook requires jq for JSON parsing" >&2
+  echo '{}'
+  exit 0
+fi
 
 TIMEOUT="${IMPRINT_QUERY_TIMEOUT:-5}"
 

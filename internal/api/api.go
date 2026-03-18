@@ -293,8 +293,8 @@ func (h *Handler) handleAdminReset(w http.ResponseWriter, r *http.Request) {
 		EnsureChunkVecTable(ctx context.Context, dims int) error
 	}); ok {
 		ctx := r.Context()
-		sqlStore.EnsureVecTable(ctx, 0)
-		sqlStore.EnsureChunkVecTable(ctx, 0)
+		_ = sqlStore.EnsureVecTable(ctx, 0)      //nolint:errcheck // best-effort after reset; dims unknown
+		_ = sqlStore.EnsureChunkVecTable(ctx, 0) //nolint:errcheck // best-effort after reset; dims unknown
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reset complete"})

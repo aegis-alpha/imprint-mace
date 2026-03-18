@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
@@ -44,6 +46,34 @@ func testAPI(t *testing.T) (*Handler, db.Store) {
 	}}
 	q := query.New(store, nil, sender, "", slog.Default())
 	h := NewHandler(nil, store, q, "test", slog.Default())
+	return h, store
+}
+
+func testAPIWithBuilder(t *testing.T) (*Handler, db.Store) {
+	t.Helper()
+	store, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
+		t.Fatalf("vec table: %v", err)
+	}
+	if err := store.EnsureChunkVecTable(context.Background(), 4); err != nil {
+		t.Fatalf("chunk vec table: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	sender := &mockSender{response: &provider.Response{
+		Content:      `{"answer": "test answer", "citations": [], "confidence": 0.5, "notes": ""}`,
+		ProviderName: "mock", Model: "test", TokensUsed: 10,
+	}}
+	q := query.New(store, nil, sender, "", slog.Default())
+	builder := impctx.New(store, nil, "", impctx.BuilderConfig{
+		RecentHours:        24,
+		MaxFacts:           20,
+		IncludePreferences: true,
+	}, slog.Default())
+	h := NewHandlerWithBuilder(nil, store, q, builder, "test", slog.Default())
 	return h, store
 }
 
@@ -124,7 +154,9 @@ func TestEntities_FilterByType(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var entities []model.Entity
-	json.Unmarshal(w.Body.Bytes(), &entities)
+	if err := json.Unmarshal(w.Body.Bytes(), &entities); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
 	if len(entities) != 1 {
 		t.Errorf("expected 1 person entity, got %d", len(entities))
 	}
@@ -150,7 +182,9 @@ func TestFacts_ListAll(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var facts []model.Fact
-	json.Unmarshal(w.Body.Bytes(), &facts)
+	if err := json.Unmarshal(w.Body.Bytes(), &facts); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
 	if len(facts) != 1 {
 		t.Errorf("expected 1 fact, got %d", len(facts))
 	}
@@ -179,7 +213,9 @@ func TestFacts_FilterByType(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var facts []model.Fact
-	json.Unmarshal(w.Body.Bytes(), &facts)
+	if err := json.Unmarshal(w.Body.Bytes(), &facts); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
 	if len(facts) != 1 {
 		t.Errorf("expected 1 decision fact, got %d", len(facts))
 	}
@@ -209,7 +245,9 @@ func TestGraph_ReturnsSubgraph(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var graph db.EntityGraph
-	json.Unmarshal(w.Body.Bytes(), &graph)
+	if err := json.Unmarshal(w.Body.Bytes(), &graph); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
 	if graph.Center.Name != "Alice" {
 		t.Errorf("expected center=Alice, got %s", graph.Center.Name)
 	}
@@ -250,7 +288,9 @@ func TestQuery_ReturnsAnswer(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	var result model.QueryResult
-	json.Unmarshal(w.Body.Bytes(), &result)
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
 	if result.Answer == "" {
 		t.Error("expected non-empty answer")
 	}
@@ -348,7 +388,9 @@ func TestPostSupersede_CreatesNewFact(t *testing.T) {
 	}
 
 	var newFact model.Fact
-	json.Unmarshal(w.Body.Bytes(), &newFact)
+	if err := json.Unmarshal(w.Body.Bytes(), &newFact); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
 	if newFact.Content != "Alice switched to Go." {
 		t.Errorf("new content = %q", newFact.Content)
 	}
@@ -357,6 +399,111 @@ func TestPostSupersede_CreatesNewFact(t *testing.T) {
 	if old.SupersededBy == "" {
 		t.Error("old fact should be superseded")
 	}
+}
+
+// --- GET /context ---
+
+func TestContext_ReturnsText(t *testing.T) {
+	h, store := testAPIWithBuilder(t)
+	ctx := context.Background()
+
+	store.CreateFact(ctx, &model.Fact{
+		ID: "ctx-1", FactType: model.FactPreference, Subject: "Alice",
+		Content: "Alice prefers dark mode.", Confidence: 0.9,
+		Source: model.Source{TranscriptFile: "test.md"}, CreatedAt: time.Now(),
+	})
+
+	req := httptest.NewRequest("GET", "/context?hint=dark+mode", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp contextResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
+	if resp.Context == "" {
+		t.Error("expected non-empty context")
+	}
+}
+
+func TestContext_EmptyHint(t *testing.T) {
+	h, store := testAPIWithBuilder(t)
+	ctx := context.Background()
+
+	store.CreateFact(ctx, &model.Fact{
+		ID: "ctx-2", FactType: model.FactPreference, Subject: "Bob",
+		Content: "Bob prefers Go.", Confidence: 0.8,
+		Source: model.Source{TranscriptFile: "test.md"}, CreatedAt: time.Now(),
+	})
+
+	req := httptest.NewRequest("GET", "/context", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp contextResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
+}
+
+func TestContext_NoBuilder(t *testing.T) {
+	h, _ := testAPI(t)
+
+	req := httptest.NewRequest("GET", "/context", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 (route not registered without builder), got %d", w.Code)
+	}
+}
+
+func TestContext_BuilderError(t *testing.T) {
+	store, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	builder := impctx.New(&errStore{}, nil, "", impctx.BuilderConfig{
+		RecentHours: 24, MaxFacts: 20, IncludePreferences: true,
+	}, slog.Default())
+	h := NewHandlerWithBuilder(nil, store, nil, builder, "test", slog.Default())
+
+	req := httptest.NewRequest("GET", "/context?hint=test", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (builder degrades gracefully), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp contextResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response JSON: %v", err)
+	}
+	if resp.Context != "" {
+		t.Errorf("expected empty context on store errors, got %q", resp.Context)
+	}
+}
+
+type errStore struct{ db.Store }
+
+func (e *errStore) SearchByVector(_ context.Context, _ []float32, _ int) ([]db.ScoredFact, error) {
+	return nil, errors.New("forced error")
+}
+
+func (e *errStore) SearchByText(_ context.Context, _ string, _ int) ([]db.ScoredFact, error) {
+	return nil, errors.New("forced error")
+}
+
+func (e *errStore) ListFacts(_ context.Context, _ db.FactFilter) ([]model.Fact, error) {
+	return nil, errors.New("forced error")
 }
 
 // --- method not allowed ---

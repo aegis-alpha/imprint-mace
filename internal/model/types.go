@@ -47,8 +47,9 @@ type Fact struct {
 	Content      string    `json:"content"`
 	Confidence   float64   `json:"confidence"`
 	Validity     TimeRange `json:"validity"`
-	SupersededBy string    `json:"superseded_by,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	SupersededBy    string    `json:"superseded_by,omitempty"`
+	SupersedeReason string    `json:"supersede_reason,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
 	Embedding      []float32 `json:"embedding,omitempty"`
 	EmbeddingModel string    `json:"embedding_model,omitempty"`
 }

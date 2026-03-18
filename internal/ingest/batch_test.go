@@ -514,7 +514,7 @@ func TestProcessDir_SupersedesRealtimeFacts(t *testing.T) {
 	all, _ := store.ListFacts(ctx, db.FactFilter{})
 	var supersededCount int
 	for _, f := range all {
-		if f.Source.TranscriptFile == "realtime:test-session" && f.SupersededBy == "batch-replaced" {
+		if f.Source.TranscriptFile == "realtime:test-session" && f.SupersedeReason == "batch-replaced" {
 			supersededCount++
 		}
 	}

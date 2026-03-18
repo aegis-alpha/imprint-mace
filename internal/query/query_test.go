@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/db"
+	"github.com/aegis-alpha/imprint-mace/internal/fts"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 )
@@ -734,9 +735,9 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"???", ""},
 	}
 	for _, tt := range tests {
-		got := sanitizeFTS5Query(tt.input)
+		got := fts.SanitizeQuery(tt.input)
 		if got != tt.want {
-			t.Errorf("sanitizeFTS5Query(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("fts.SanitizeQuery(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }
