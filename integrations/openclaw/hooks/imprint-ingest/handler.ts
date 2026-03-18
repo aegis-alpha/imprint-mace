@@ -21,8 +21,8 @@ function getImprintURL(): string {
 
 async function checkReachable(url: string): Promise<boolean> {
   const now = Date.now();
-  if (reachable) return true;
-  if (now - lastCheckAt < RECHECK_INTERVAL_MS) return false;
+  if (reachable && now - lastCheckAt < RECHECK_INTERVAL_MS) return true;
+  if (!reachable && now - lastCheckAt < RECHECK_INTERVAL_MS) return false;
   lastCheckAt = now;
   try {
     const res = await fetch(`${url}/status`, {
@@ -30,6 +30,7 @@ async function checkReachable(url: string): Promise<boolean> {
     });
     if (res.ok) { reachable = true; return true; }
   } catch {}
+  reachable = false;
   console.warn(
     `[imprint-ingest] Imprint not reachable at ${url} -- will retry in ${RECHECK_INTERVAL_MS / 1000}s. ` +
       `Set IMPRINT_URL env or check that imprint serve is running.`,

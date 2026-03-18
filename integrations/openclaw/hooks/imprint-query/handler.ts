@@ -21,8 +21,8 @@ function getImprintURL(): string {
 
 async function checkReachable(url: string): Promise<boolean> {
   const now = Date.now();
-  if (reachable) return true;
-  if (now - lastCheckAt < RECHECK_INTERVAL_MS) return false;
+  if (reachable && now - lastCheckAt < RECHECK_INTERVAL_MS) return true;
+  if (!reachable && now - lastCheckAt < RECHECK_INTERVAL_MS) return false;
   lastCheckAt = now;
   try {
     const res = await fetch(`${url}/status`, {
@@ -30,6 +30,7 @@ async function checkReachable(url: string): Promise<boolean> {
     });
     if (res.ok) { reachable = true; return true; }
   } catch {}
+  reachable = false;
   console.warn(
     `[imprint-query] Imprint not reachable at ${url} -- will retry in ${RECHECK_INTERVAL_MS / 1000}s. ` +
       `Set IMPRINT_URL env or check that imprint serve is running.`,
@@ -67,15 +68,14 @@ const handler = async (event: any) => {
 
   const timeoutMs = getTimeoutMs();
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  try {
     const res = await fetch(
       `${url}/context?hint=${encodeURIComponent(content)}`,
       { signal: controller.signal },
     );
-    clearTimeout(timer);
 
     if (!res.ok) {
       console.warn(`[imprint-query] /context returned ${res.status}`);
@@ -93,6 +93,8 @@ const handler = async (event: any) => {
       console.warn("[imprint-query] /context failed:", err);
       setUnreachable();
     }
+  } finally {
+    clearTimeout(timer);
   }
 };
 
