@@ -1,4 +1,4 @@
-# Imprint configuration for Docker deployment
+# Imprint configuration for OpenClaw test deployment
 # Copy to config.toml and fill in your values:
 #   cp config.toml.example config.toml
 
@@ -37,15 +37,6 @@ consolidate_after_ingest = true
 extraction = "/etc/imprint/prompts/extraction-prompt.md"
 consolidation = "/etc/imprint/prompts/consolidation-prompt.md"
 query = "/etc/imprint/prompts/query-prompt.md"
-
-# Provider chains: ordered by priority (first = tried first).
-# api_key_env is the name of the environment variable holding the key.
-#
-# Provider types (determined by "name" field):
-#   "anthropic" -> Anthropic Messages API (/v1/messages)
-#   "ollama"    -> Ollama native API (/api/chat), no API key needed
-#   anything else -> OpenAI-compatible (/v1/chat/completions)
-#     Covers: OpenAI, Google Gemini, OpenRouter, Groq, Together, etc.
 
 # --- Extraction providers ---
 
@@ -94,10 +85,7 @@ timeout_seconds = 30
 priority = 1
 
 # --- OpenClaw integration ---
-# Controls how Imprint integrates with OpenClaw's memory system.
-# "off"      = no change to OpenClaw memory (default, safe)
-# "parallel" = Imprint MCP tools alongside memory_search (testing)
-# "replace"  = Imprint MCP tools replace memory_search (production)
-# See deploy/test-openclaw/README.md for setup instructions.
+# Set to "parallel" for testing (both memory_search and Imprint available).
+# Change to "replace" when ready to disable memory_search entirely.
 [openclaw]
-memory_backend_mode = "off"
+memory_backend_mode = "parallel"

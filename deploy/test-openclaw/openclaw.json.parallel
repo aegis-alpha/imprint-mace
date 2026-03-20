@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "imprint": {
+      "command": "docker",
+      "args": ["exec", "-i", "test-openclaw-imprint-mcp-1", "/usr/local/bin/imprint", "mcp"],
+      "transport": "stdio"
+    }
+  }
+}

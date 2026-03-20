@@ -21,6 +21,7 @@ type Config struct {
 	Prompts       PromptPaths         `toml:"prompts"`
 	Context       ContextConfig       `toml:"context"`
 	Quality       QualityConfig       `toml:"quality"`
+	OpenClaw      OpenClawConfig      `toml:"openclaw"`
 }
 
 type APIConfig struct {
@@ -189,6 +190,21 @@ func (c *Config) EffectiveQualityConfig() QualityConfig {
 		q.MutationPromptPath = "prompts/mutation-prompt.md"
 	}
 	return q
+}
+
+type OpenClawConfig struct {
+	MemoryBackendMode string `toml:"memory_backend_mode"`
+}
+
+func (c *Config) EffectiveOpenClawMode() string {
+	mode := c.OpenClaw.MemoryBackendMode
+	if mode == "" {
+		return "off"
+	}
+	if mode != "off" && mode != "parallel" && mode != "replace" {
+		return "off"
+	}
+	return mode
 }
 
 func DefaultTypes() TypesConfig {

@@ -1,0 +1,52 @@
+# Test deployment: OpenClaw agent + Imprint as memory backend
+# SEPARATE from production Kevin -- different ports, different data
+#
+# Usage:
+#   cp .env.example .env  # fill in API keys
+#   cp config.toml.example config.toml
+#   docker-compose up -d
+
+services:
+  imprint:
+    image: ghcr.io/aegis-alpha/imprint-mace:main
+    volumes:
+      - ./data/imprint:/data
+      - ./config.toml:/etc/imprint/config.toml
+      - ./transcripts:/transcripts
+    command: ["serve", "--watch=/transcripts"]
+    ports:
+      - "127.0.0.1:8180:8080"
+    restart: unless-stopped
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - IMPRINT_ADVERTISE_URL=http://imprint:8080
+
+  imprint-mcp:
+    image: ghcr.io/aegis-alpha/imprint-mace:main
+    volumes:
+      - ./data/imprint:/data
+      - ./config.toml:/etc/imprint/config.toml
+    command: ["mcp"]
+    stdin_open: true
+    restart: unless-stopped
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+  # OpenClaw test agent -- uncomment and configure when ready
+  # openclaw:
+  #   image: openclaw/openclaw:latest
+  #   volumes:
+  #     - ./openclaw.json:/root/.openclaw/openclaw.json
+  #     - ./data/openclaw:/root/.openclaw
+  #   ports:
+  #     - "127.0.0.1:3100:3000"
+  #   environment:
+  #     - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #   depends_on:
+  #     - imprint

@@ -415,6 +415,30 @@ priority = 1
 	}
 }
 
+// --- OpenClawConfig ---
+
+func TestEffectiveOpenClawMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want string
+	}{
+		{"empty defaults to off", "", "off"},
+		{"explicit off", "off", "off"},
+		{"parallel", "parallel", "parallel"},
+		{"replace", "replace", "replace"},
+		{"invalid defaults to off", "banana", "off"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{OpenClaw: OpenClawConfig{MemoryBackendMode: tt.mode}}
+			if got := cfg.EffectiveOpenClawMode(); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // --- helpers ---
 
 func loadFromString(t *testing.T, content string) *Config {
