@@ -412,8 +412,10 @@ The OpenAI lister also handles Google's response format (array under `models` ke
 2. For each returned model, upsert a row in `provider_models` (name, model ID, context window, available=true, last_checked).
 3. For each configured (provider, task, model) triple, check whether the configured model appears in the available set:
    - Found: status = `ok`, active_model = configured_model
-   - Not found: status = `degraded`, active_model = empty, last_error = "model not found in provider model list"
+   - Not found: status = `degraded`, active_model = result of `findSubstitute()`, last_error describes the substitution
 4. Write results to `provider_health`.
+
+**Model substitution** (`findSubstitute`): when the configured model is missing, tries prefix matching with progressively shorter prefixes. For example, `gpt-5-nano` missing tries `gpt-5-*`, then `gpt-*`. If no prefix match, picks any available model from that provider. If no models at all, returns empty.
 
 ### 6.6 Provider Models Table
 
@@ -434,7 +436,72 @@ provider_health (provider_name, task_type, configured_model, active_model, statu
     PRIMARY KEY (provider_name, task_type)
 ```
 
-Status values: `ok` (configured model available), `degraded` (model not found), `unavailable` (provider unreachable).
+Status values: `ok` (configured model available), `degraded` (model not found, substitute may be active), `unavailable` (provider unreachable).
+
+### 6.8 Error Classification
+
+`internal/provider/errors.go` classifies errors from provider Send() calls into four categories:
+
+| Category | Triggers | DB error_type values |
+|----------|----------|---------------------|
+| `ErrorTransient` | timeout, connection refused, HTTP 429/502/503/529 | `timeout`, `connection_refused`, `http_502`, `http_503`, `http_529` |
+| `ErrorAuth` | HTTP 401/403, invalid API key | `http_401`, `http_403`, `invalid_key` |
+| `ErrorModelNotFound` | "model not found" in error message | `model_not_found` |
+| `ErrorOther` | anything else | `unknown` |
+
+Classification parses HTTP status codes from error strings (providers wrap status in messages like `"status 503: ..."`), detects timeout/connection errors from the `net` package, and unwraps error chains.
+
+### 6.9 Provider Ops Table
+
+Tracks operational status per provider. One row per provider name.
+
+```sql
+provider_ops (provider_name, status, retry_count, max_retries, last_error,
+              error_type, next_check_at, last_success, created_at, updated_at)
+    PRIMARY KEY (provider_name)
+```
+
+Status values: `ok`, `transient_error`, `auth_error`, `exhausted` (max retries reached).
+
+### 6.10 Retry Queue
+
+Stores failed requests when all providers are down, for later processing when a provider recovers.
+
+```sql
+retry_queue (id, task_type, payload, created_at, retry_count, last_error, status)
+    PRIMARY KEY (id)
+```
+
+Status values: `pending`, `processing`, `completed`, `expired`. Entries older than `queue_ttl_hours` (default 24) are expired.
+
+### 6.11 ResolvedProvider Wrapper
+
+`internal/provider.ResolvedProvider` wraps a `Provider` with health-aware logic. `ResolvedEmbedder` does the same for `Embedder`.
+
+**Send() flow:**
+
+1. Read `provider_ops` for this provider.
+2. If status is `auth_error`, return error immediately (no call to inner provider).
+3. If status is `transient_error` and `next_check_at` is in the future, return error (skip until retry window).
+4. Call `inner.Send()`.
+5. On success: reset `provider_ops` to `ok`, record `last_success`.
+6. On failure: classify error, update `provider_ops` (increment retry_count, set next_check_at = now + retry_interval_hours).
+7. If status becomes `exhausted` or `auth_error`: write a context-type fact to Imprint DB with 24h TTL, so any agent querying Imprint sees the provider issue.
+
+**Catalog refresh triggers:**
+
+- At server start (`runServe` calls `runHealthCheckAtStartup`)
+- Every `catalog_refresh_days` (default 3) via a background goroutine
+- On `ErrorModelNotFound` (planned for BVP-306)
+
+**Configuration** (`[health]` section in config.toml):
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `catalog_refresh_days` | 3 | How often to re-check provider model catalogs |
+| `max_retries` | 5 | Retries before marking provider as `exhausted` |
+| `retry_interval_hours` | 1 | Hours between retry attempts for transient errors |
+| `queue_ttl_hours` | 24 | Hours before pending retry queue entries expire |
 
 ---
 
@@ -456,6 +523,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 | `[[types.*]]` | Type taxonomy: fact_types, entity_types, relation_types, connection_types |
 | `[context]` | Context builder settings: recent_hours, max_facts, include_preferences |
 | `[quality]` | Quality signal collection + Karpathy loop: enabled, thresholds, prompt paths, golden_dir |
+| `[health]` | Provider auto-healing: catalog_refresh_days, max_retries, retry_interval_hours, queue_ttl_hours |
 | `[openclaw]` | OpenClaw memory backend mode (off/parallel/replace) |
 
 ### 7.2 Defaults

@@ -99,7 +99,26 @@ Database statistics, wrapped with version info.
   "eval_scores": {
     "extraction": {"score": 0.72, "examples": 42, "date": "2026-03-20T09:00:00Z"},
     "retrieval": {"score": 0.85, "score2": 0.91, "examples": 21, "date": "2026-03-20T09:05:00Z"}
-  }
+  },
+  "providers": [
+    {
+      "provider_name": "google",
+      "task_type": "extraction",
+      "configured_model": "gemini-2.5-flash",
+      "active_model": "gemini-2.5-flash",
+      "status": "ok"
+    },
+    {
+      "provider_name": "anthropic",
+      "task_type": "extraction",
+      "configured_model": "claude-sonnet-4",
+      "active_model": "",
+      "status": "auth_error",
+      "last_error": "status 401: unauthorized",
+      "retry_count": 1
+    }
+  ],
+  "retry_queue_depth": 0
 }
 ```
 
@@ -110,6 +129,8 @@ Optional fields (omitted when empty):
 | `quality_signals` | array | Quality signals have been collected (deduplicated: latest per signal_type + category) |
 | `query_stats` | object | At least one query or context request in the last 30 days |
 | `eval_scores` | object | At least one eval run recorded. `extraction`: composite score. `retrieval`: score = Recall@10, score2 = MRR. |
+| `providers` | array | Provider health entries exist. Each entry: provider_name, task_type, configured_model, active_model, status, last_error (if any), retry_count (if > 0). Status merged from provider_health + provider_ops. |
+| `retry_queue_depth` | int | Pending + processing entries in retry queue (omitted when 0). |
 
 ### GET /context
 
