@@ -830,3 +830,137 @@ func TestRetrieveByGraph_FindsConnectedFacts(t *testing.T) {
 		t.Error("expected graph to find fact gf-001 via Alice -> Acme relationship")
 	}
 }
+
+// --- data quality tests ---
+
+func TestComputeDataQuality_BasicMetrics(t *testing.T) {
+	now := time.Now()
+	ranked := []rankedFact{
+		{fact: model.Fact{
+			ID: "dq-001", Subject: "Acme", Content: "Acme uses Go.",
+			Confidence: 0.5, CreatedAt: now.Add(-10 * 24 * time.Hour),
+			Source: model.Source{TranscriptFile: "a.md"},
+		}},
+		{fact: model.Fact{
+			ID: "dq-002", Subject: "Acme", Content: "Acme deploys to Linux.",
+			Confidence: 0.8, CreatedAt: now.Add(-5 * 24 * time.Hour),
+			Source:       model.Source{TranscriptFile: "b.md"},
+			SupersededBy: "dq-003",
+		}},
+		{fact: model.Fact{
+			ID: "dq-003", Subject: "Bob", Content: "Bob prefers Python.",
+			Confidence: 0.95, CreatedAt: now.Add(-1 * 24 * time.Hour),
+			Source: model.Source{TranscriptFile: "a.md"},
+		}},
+	}
+
+	dq := computeDataQuality(ranked)
+
+	if dq.FactCount != 3 {
+		t.Errorf("FactCount = %d, want 3", dq.FactCount)
+	}
+	wantAvg := (0.5 + 0.8 + 0.95) / 3.0
+	if diff := dq.AvgConfidence - wantAvg; diff > 0.01 || diff < -0.01 {
+		t.Errorf("AvgConfidence = %.4f, want ~%.4f", dq.AvgConfidence, wantAvg)
+	}
+	if dq.MinConfidence != 0.5 {
+		t.Errorf("MinConfidence = %.2f, want 0.5", dq.MinConfidence)
+	}
+	if dq.MaxConfidence != 0.95 {
+		t.Errorf("MaxConfidence = %.2f, want 0.95", dq.MaxConfidence)
+	}
+	if dq.SupersededCount != 1 {
+		t.Errorf("SupersededCount = %d, want 1", dq.SupersededCount)
+	}
+	if dq.SourceCount != 2 {
+		t.Errorf("SourceCount = %d, want 2", dq.SourceCount)
+	}
+	if dq.AgeSpreadDays < 8.5 || dq.AgeSpreadDays > 9.5 {
+		t.Errorf("AgeSpreadDays = %.1f, want ~9.0", dq.AgeSpreadDays)
+	}
+}
+
+func TestComputeDataQuality_Empty(t *testing.T) {
+	dq := computeDataQuality(nil)
+
+	if dq.FactCount != 0 {
+		t.Errorf("FactCount = %d, want 0", dq.FactCount)
+	}
+	if dq.AvgConfidence != 0 {
+		t.Errorf("AvgConfidence = %.2f, want 0", dq.AvgConfidence)
+	}
+	if dq.AgeSpreadDays != 0 {
+		t.Errorf("AgeSpreadDays = %.2f, want 0", dq.AgeSpreadDays)
+	}
+}
+
+func TestComputeDataQuality_SingleFact(t *testing.T) {
+	now := time.Now()
+	ranked := []rankedFact{
+		{fact: model.Fact{
+			ID: "dq-single", Subject: "Acme", Content: "Acme uses Go.",
+			Confidence: 0.9, CreatedAt: now.Add(-3 * 24 * time.Hour),
+			Source: model.Source{TranscriptFile: "a.md"},
+		}},
+	}
+
+	dq := computeDataQuality(ranked)
+
+	if dq.FactCount != 1 {
+		t.Errorf("FactCount = %d, want 1", dq.FactCount)
+	}
+	if dq.AgeSpreadDays != 0 {
+		t.Errorf("AgeSpreadDays = %.2f, want 0", dq.AgeSpreadDays)
+	}
+	if dq.SourceCount != 1 {
+		t.Errorf("SourceCount = %d, want 1", dq.SourceCount)
+	}
+	if dq.MinConfidence != 0.9 || dq.MaxConfidence != 0.9 {
+		t.Errorf("Min/Max confidence = %.2f/%.2f, want 0.9/0.9", dq.MinConfidence, dq.MaxConfidence)
+	}
+}
+
+func TestBuildPrompt_IncludesDataQuality(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+	now := time.Now()
+
+	facts := []enrichedFact{
+		{rankedFact: rankedFact{fact: model.Fact{
+			ID: "dqp-001", FactType: model.FactDecision, Subject: "Acme",
+			Content: "Acme uses Go.", Confidence: 0.9,
+			CreatedAt: now, Source: model.Source{TranscriptFile: "a.md"},
+		}}},
+		{rankedFact: rankedFact{fact: model.Fact{
+			ID: "dqp-002", FactType: model.FactPreference, Subject: "Alice",
+			Content: "Alice prefers dark mode.", Confidence: 0.7,
+			CreatedAt: now, Source: model.Source{TranscriptFile: "b.md"},
+		}}},
+		{rankedFact: rankedFact{fact: model.Fact{
+			ID: "dqp-003", FactType: model.FactProject, Subject: "Acme",
+			Content: "Acme deploys to Linux.", Confidence: 0.85,
+			CreatedAt: now, Source: model.Source{TranscriptFile: "a.md"},
+		}}},
+	}
+
+	prompt := q.buildPrompt("What does Acme use?", facts)
+
+	if !strings.Contains(prompt.user, "### Data Quality") {
+		t.Error("expected user prompt to contain '### Data Quality'")
+	}
+	if !strings.Contains(prompt.user, "Average confidence:") {
+		t.Error("expected user prompt to contain 'Average confidence:'")
+	}
+	if !strings.Contains(prompt.user, "Source diversity:") {
+		t.Error("expected user prompt to contain 'Source diversity:'")
+	}
+}
+
+func TestBuildPrompt_OmitsDataQualityWhenEmpty(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	prompt := q.buildPrompt("What is DataSync?", nil)
+
+	if strings.Contains(prompt.user, "### Data Quality") {
+		t.Error("expected user prompt to NOT contain '### Data Quality' when no facts")
+	}
+}

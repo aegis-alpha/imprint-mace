@@ -36,6 +36,11 @@ Return a single JSON object with this exact structure:
 6. Keep the answer concise -- 1-5 sentences. The user wants a direct answer, not an essay.
 7. If transcript context is provided, use it to enrich the answer but cite the structured facts, not the raw transcript.
 8. Temporal awareness: if the question is about current state, prefer recent facts over old ones.
+9. Data quality awareness: A "Data Quality" section may be included in the input. Use it to calibrate your confidence:
+   - If average confidence < 0.6 or fewer than 3 facts found, set your confidence below 0.5 and add a caveat (e.g. "Based on limited/low-confidence data: ...").
+   - If superseded facts are present, note this and prefer non-superseded facts.
+   - If age spread > 30 days, consider that older facts may be outdated.
+   - If source diversity = 1, note that all information comes from a single source.
 
 ## Input Format
 
@@ -60,6 +65,19 @@ Raw transcript lines for additional context:
 --- <file_path> lines <start>-<end> ---
 <raw text>
 ```
+
+### Data Quality (optional)
+Objective metrics computed from the retrieved facts:
+```
+- Facts retrieved: <N>
+- Average confidence: <N>
+- Confidence range: <min> - <max>
+- Superseded facts included: <N>
+- Near-duplicate pairs: <N>
+- Source diversity: <N> distinct files
+- Age spread: <N> days (oldest: <N> days ago, newest: <N> days ago)
+```
+Only present when facts are retrieved. Use these signals per rule 9.
 
 ## Examples
 
@@ -134,5 +152,39 @@ Raw transcript lines for additional context:
   "citations": [],
   "confidence": 0.1,
   "notes": "No facts found about DataSync. The question cannot be answered from available information."
+}
+```
+
+### Example 4: Low-confidence answer with data quality signals
+
+**Question:** What database does ProjectX use?
+
+**Facts:**
+```
+- [01JFAB0020] (project, confidence=0.45, 2026-02-10) ProjectX: ProjectX might use Postgres for the main database.
+- [01JFAB0021] (decision, confidence=0.6, 2026-01-15) ProjectX: ProjectX will use MySQL for analytics. (superseded_by: 01JFAB0020)
+```
+
+**Data Quality:**
+```
+- Facts retrieved: 2
+- Average confidence: 0.52
+- Confidence range: 0.45 - 0.60
+- Superseded facts included: 1
+- Near-duplicate pairs: 0
+- Source diversity: 1 distinct files
+- Age spread: 26.0 days (oldest: 64.0 days ago, newest: 38.0 days ago)
+```
+
+**Output:**
+```json
+{
+  "answer": "Based on limited/low-confidence data: ProjectX may use Postgres for its main database. An earlier decision mentioned MySQL for analytics, but that was superseded. All information comes from a single source and the data is relatively old.",
+  "citations": [
+    {"fact_id": "01JFAB0020"},
+    {"fact_id": "01JFAB0021"}
+  ],
+  "confidence": 0.4,
+  "notes": "Low average confidence (0.52), one superseded fact, single source. The newer fact (Postgres) supersedes the older one (MySQL) but itself has low confidence (0.45)."
 }
 ```
