@@ -17,7 +17,7 @@
 Memory And Context Engine (MACE) for AI agents. Imprint turns conversations into a structured knowledge graph and uses it to form the agent's working context -- what it knows, what was decided, what matters right now. Cursor, Claude Code, any MCP client. Single Go binary, single SQLite file.
 
 > **Status: Experimental (see badge for version)**
-> Imprint is functional and deployed, but the API, MCP tools, config format, and database schema may change between versions. 241 tests pass, dual-layer memory works for OpenClaw, but multi-platform integration and production hardening are in progress. Feedback and contributions welcome.
+> Imprint is functional and deployed, but the API, MCP tools, config format, and database schema may change between versions. 369 tests pass, dual-layer memory works for OpenClaw, but multi-platform integration and production hardening are in progress. Feedback and contributions welcome.
 
 
 ## The Problem
@@ -386,7 +386,7 @@ The entire cycle is autonomous. No human intervention needed, though all proposa
 - **Self-editing memory:** agents can update fact metadata or supersede facts with corrected content via MCP tools or HTTP API
 - **Eval harness:** extraction eval (CaRB-style P/R/F1, NRR, ECE, composite score) + retrieval eval (Recall@10, MRR, per-layer contribution, graceful degradation delta). Built-in golden datasets for both.
 - **Self-tuning quality:** quality signal collection (supersede rate, confidence drift, entity collision rate), Karpathy loop for automatic prompt optimization, query_log instrumentation
-- **15 CLI subcommands**, 345 tests, Docker deployment with Watchtower auto-update
+- **15 CLI subcommands**, 369 tests, Docker deployment with Watchtower auto-update
 
 ## Benchmarks
 

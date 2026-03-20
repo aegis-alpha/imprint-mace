@@ -264,6 +264,55 @@ transcripts (id, file_path, date, participants, topic, chunk_count, created_at)
 transcript_chunks (id, transcript_id, line_start, line_end, content_hash, embedding_model)
 ```
 
+**FTS5 over transcript chunks (migration 006):**
+
+```sql
+CREATE VIRTUAL TABLE transcript_chunks_fts USING fts5(content, chunk_id UNINDEXED);
+```
+
+**Supersede reason (migration 007):**
+
+```sql
+ALTER TABLE facts ADD COLUMN supersede_reason TEXT;
+```
+
+Replaces the `'batch-replaced'` sentinel in `superseded_by` with a proper column, restoring FK integrity.
+
+**Quality signals + fact citations (migration 008):**
+
+```sql
+quality_signals (id, signal_type, category, value, details, created_at)
+fact_citations (fact_id, query_id, cited_at)
+ALTER TABLE extraction_log ADD COLUMN entity_collisions INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE extraction_log ADD COLUMN entity_creations INTEGER NOT NULL DEFAULT 0;
+```
+
+**Query log (migration 009):**
+
+```sql
+query_log (id, endpoint, question, total_latency_ms, retrieval_latency_ms, synthesis_latency_ms,
+           facts_found, facts_by_vector, facts_by_text, facts_by_graph, chunks_by_vector,
+           chunks_by_text, citations_count, embedder_available, error, created_at)
+```
+
+**Eval runs (migration 010a):**
+
+```sql
+eval_runs (id, eval_type, score, score2, report, prompt_hash, examples_count, created_at)
+```
+
+**Provider models + health (migration 010b):**
+
+```sql
+provider_models (provider_name, model_id, context_window, available, last_checked)
+    PRIMARY KEY (provider_name, model_id)
+provider_health (provider_name, task_type, configured_model, active_model, status,
+                 last_error, last_checked, switched_at)
+    PRIMARY KEY (provider_name, task_type)
+```
+
+Note: migrations 010a and 010b share the same number prefix due to a numbering collision between S045 and S048. Both are applied. The next migration should be 011.
+
 ### 5.2 Vector Tables
 
 sqlite-vec virtual tables are created programmatically (not in SQL migrations) because dimensions come from config at runtime.
@@ -339,6 +388,54 @@ Each task type has its own provider chain configured independently:
 
 If no query providers are configured, the extraction chain is used as fallback.
 
+### 6.4 Model Discovery
+
+`internal/provider.ModelLister` queries provider APIs for available models. Three implementations:
+
+| Implementation | API endpoint | Auth |
+|----------------|-------------|------|
+| `OpenAIModelLister` | `GET {base_url}/models` | Bearer token |
+| `AnthropicModelLister` | `GET {base_url}/v1/models` | `x-api-key` or Bearer (token_env) |
+| `OllamaModelLister` | `GET {base_url}/api/tags` | None |
+
+The OpenAI lister also handles Google's response format (array under `models` key with `inputTokenLimit` instead of `context_window`).
+
+`NewModelListersFromConfig(taskConfigs)` builds listers from all provider configs across task types. Deduplication by `(provider_name, base_url)` ensures the same provider appearing in multiple task chains produces only one lister.
+
+### 6.5 Health Checking
+
+`internal/provider.HealthChecker` compares configured models against available models.
+
+`CheckAll(ctx)`:
+
+1. For each `ModelLister`, call `ListModels()`. On failure, mark all tasks for that provider as `unavailable` in `provider_health`.
+2. For each returned model, upsert a row in `provider_models` (name, model ID, context window, available=true, last_checked).
+3. For each configured (provider, task, model) triple, check whether the configured model appears in the available set:
+   - Found: status = `ok`, active_model = configured_model
+   - Not found: status = `degraded`, active_model = empty, last_error = "model not found in provider model list"
+4. Write results to `provider_health`.
+
+### 6.6 Provider Models Table
+
+Populated by health checking. One row per (provider, model) pair.
+
+```sql
+provider_models (provider_name, model_id, context_window, available, last_checked)
+    PRIMARY KEY (provider_name, model_id)
+```
+
+### 6.7 Provider Health Table
+
+One row per (provider, task) pair. Tracks whether the configured model is available and what the active model is.
+
+```sql
+provider_health (provider_name, task_type, configured_model, active_model, status,
+                 last_error, last_checked, switched_at)
+    PRIMARY KEY (provider_name, task_type)
+```
+
+Status values: `ok` (configured model available), `degraded` (model not found), `unavailable` (provider unreachable).
+
 ---
 
 ## 7. Configuration
@@ -357,6 +454,9 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 | `[prompts]` | Paths to extraction, consolidation, and query prompt templates |
 | `[[providers.*]]` | Provider chains for extraction, consolidation, query, embedding |
 | `[[types.*]]` | Type taxonomy: fact_types, entity_types, relation_types, connection_types |
+| `[context]` | Context builder settings: recent_hours, max_facts, include_preferences |
+| `[quality]` | Quality signal collection + Karpathy loop: enabled, thresholds, prompt paths, golden_dir |
+| `[openclaw]` | OpenClaw memory backend mode (off/parallel/replace) |
 
 ### 7.2 Defaults
 

@@ -70,16 +70,46 @@ Database statistics, wrapped with version info.
 
 ```json
 {
-  "version": "0.1.0",
+  "version": "0.4.0",
   "stats": {
     "facts": 142,
     "entities": 38,
     "relationships": 67,
     "consolidations": 5,
     "ingested_files": 12
+  },
+  "quality_signals": [
+    {
+      "signal_type": "supersede_rate",
+      "category": "decision",
+      "value": 0.12,
+      "details": "{\"sample_size\": 50}",
+      "created_at": "2026-03-20T10:00:00Z"
+    }
+  ],
+  "query_stats": {
+    "total_queries": 84,
+    "total_context": 210,
+    "avg_latency_ms": 1250,
+    "avg_retrieval_ms": 180,
+    "avg_synthesis_ms": 1070,
+    "avg_facts_found": 8,
+    "embedder_available_pct": 100
+  },
+  "eval_scores": {
+    "extraction": {"score": 0.72, "examples": 42, "date": "2026-03-20T09:00:00Z"},
+    "retrieval": {"score": 0.85, "score2": 0.91, "examples": 21, "date": "2026-03-20T09:05:00Z"}
   }
 }
 ```
+
+Optional fields (omitted when empty):
+
+| Field | Type | Present when |
+|-------|------|-------------|
+| `quality_signals` | array | Quality signals have been collected (deduplicated: latest per signal_type + category) |
+| `query_stats` | object | At least one query or context request in the last 30 days |
+| `eval_scores` | object | At least one eval run recorded. `extraction`: composite score. `retrieval`: score = Recall@10, score2 = MRR. |
 
 ### GET /context
 
