@@ -851,6 +851,33 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		logger.Info("file watcher started", "path", watchDir)
 	}
 
+	if cfg.Consolidation.IntervalMinutes > 0 && len(cfg.Providers.Consolidation) > 0 {
+		consChain, err := provider.NewChain(cfg.Providers.Consolidation)
+		if err != nil {
+			logger.Warn("consolidation provider unavailable in serve mode", "error", err)
+		} else {
+			types := cfg.EffectiveTypes()
+			threshold := cfg.EffectiveClusterSimilarityThreshold()
+			cons, err := consolidation.New(consChain, store, cfg.Prompts.Consolidation, types, threshold, logger)
+			if err != nil {
+				logger.Warn("failed to create consolidator for serve mode", "error", err)
+			} else {
+				interval := time.Duration(cfg.Consolidation.IntervalMinutes) * time.Minute
+				minFacts := cfg.Consolidation.MinFacts
+				if minFacts == 0 {
+					minFacts = 10
+				}
+				sched := consolidation.NewScheduler(cons, store, interval, minFacts, cfg.Consolidation.MaxGroupSize, logger)
+				schedCtx, schedCancel := context.WithCancel(context.Background())
+				defer schedCancel()
+				go sched.Run(schedCtx)
+				logger.Info("consolidation scheduler started",
+					"interval_minutes", cfg.Consolidation.IntervalMinutes,
+					"min_facts", minFacts)
+			}
+		}
+	}
+
 	addr := cfg.EffectiveAPIAddr()
 	if hostFlag != "" || portFlag != 0 {
 		host := cfg.API.Host

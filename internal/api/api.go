@@ -316,7 +316,12 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		req.Source = "api"
 	}
 
-	result, err := h.engine.Ingest(r.Context(), req.Text, req.Source)
+	// Detach from HTTP request context so client disconnect (e.g. hook
+	// timeout) does not cancel the LLM extraction mid-flight. The provider's
+	// own http.Client.Timeout governs the outbound call duration.
+	ctx := context.WithoutCancel(r.Context())
+
+	result, err := h.engine.Ingest(ctx, req.Text, req.Source)
 	if err != nil {
 		h.logger.Error("ingest failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "ingest failed")

@@ -360,6 +360,109 @@ type rankedFact struct {
 	score float64
 }
 
+type dataQualityMetrics struct {
+	FactCount       int
+	AvgConfidence   float64
+	MinConfidence   float64
+	MaxConfidence   float64
+	SupersededCount int
+	NearDuplicates  int
+	AgeSpreadDays   float64
+	SourceCount     int
+	OldestFactDays  float64
+	NewestFactDays  float64
+}
+
+func computeDataQuality(ranked []rankedFact) dataQualityMetrics {
+	if len(ranked) == 0 {
+		return dataQualityMetrics{}
+	}
+
+	now := time.Now()
+	m := dataQualityMetrics{
+		FactCount:     len(ranked),
+		MinConfidence: ranked[0].fact.Confidence,
+		MaxConfidence: ranked[0].fact.Confidence,
+	}
+
+	var oldest, newest time.Time
+	sources := map[string]bool{}
+	var totalConf float64
+
+	for i := range ranked {
+		f := &ranked[i].fact
+		totalConf += f.Confidence
+		if f.Confidence < m.MinConfidence {
+			m.MinConfidence = f.Confidence
+		}
+		if f.Confidence > m.MaxConfidence {
+			m.MaxConfidence = f.Confidence
+		}
+		if f.SupersededBy != "" {
+			m.SupersededCount++
+		}
+		if f.Source.TranscriptFile != "" {
+			sources[f.Source.TranscriptFile] = true
+		}
+		if oldest.IsZero() || f.CreatedAt.Before(oldest) {
+			oldest = f.CreatedAt
+		}
+		if newest.IsZero() || f.CreatedAt.After(newest) {
+			newest = f.CreatedAt
+		}
+	}
+
+	m.AvgConfidence = totalConf / float64(len(ranked))
+	m.SourceCount = len(sources)
+
+	if !oldest.IsZero() && !newest.IsZero() {
+		m.AgeSpreadDays = newest.Sub(oldest).Hours() / 24.0
+		m.OldestFactDays = now.Sub(oldest).Hours() / 24.0
+		m.NewestFactDays = now.Sub(newest).Hours() / 24.0
+	}
+
+	for i := 0; i < len(ranked); i++ {
+		for j := i + 1; j < len(ranked); j++ {
+			a, b := &ranked[i].fact, &ranked[j].fact
+			if a.Subject != b.Subject || a.Subject == "" {
+				continue
+			}
+			if jaccardWords(a.Content, b.Content) > 0.7 {
+				m.NearDuplicates++
+			}
+		}
+	}
+
+	return m
+}
+
+func jaccardWords(a, b string) float64 {
+	setA := wordSet(a)
+	setB := wordSet(b)
+	if len(setA) == 0 && len(setB) == 0 {
+		return 0
+	}
+	inter := 0
+	for w := range setA {
+		if setB[w] {
+			inter++
+		}
+	}
+	union := len(setA) + len(setB) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+func wordSet(s string) map[string]bool {
+	m := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(s)) {
+		m[w] = true
+	}
+	return m
+}
+
 // mergeAndRank deduplicates facts across all layers and ranks them
 // using Reciprocal Rank Fusion (k=60).
 func (q *Querier) mergeAndRank(r *retrievalResult) []rankedFact {
@@ -541,6 +644,13 @@ func (q *Querier) buildPrompt(question string, facts []enrichedFact) builtPrompt
 			factLines = append(factLines, line)
 		}
 		userParts = append(userParts, "### Facts\n"+strings.Join(factLines, "\n"))
+
+		rf := make([]rankedFact, len(facts))
+		for i := range facts {
+			rf[i] = facts[i].rankedFact
+		}
+		dq := computeDataQuality(rf)
+		userParts = append(userParts, formatDataQuality(dq))
 	}
 
 	var contextParts []string
@@ -567,6 +677,22 @@ func (q *Querier) buildPrompt(question string, facts []enrichedFact) builtPrompt
 		system: querySystemPrompt,
 		user:   strings.Join(userParts, "\n\n"),
 	}
+}
+
+func formatDataQuality(dq dataQualityMetrics) string {
+	return fmt.Sprintf(`### Data Quality
+- Facts retrieved: %d
+- Average confidence: %.2f
+- Confidence range: %.2f - %.2f
+- Superseded facts included: %d
+- Near-duplicate pairs: %d
+- Source diversity: %d distinct files
+- Age spread: %.1f days (oldest: %.1f days ago, newest: %.1f days ago)`,
+		dq.FactCount, dq.AvgConfidence,
+		dq.MinConfidence, dq.MaxConfidence,
+		dq.SupersededCount, dq.NearDuplicates,
+		dq.SourceCount,
+		dq.AgeSpreadDays, dq.OldestFactDays, dq.NewestFactDays)
 }
 
 // rawQueryResponse is the JSON shape the LLM returns for queries.
@@ -655,4 +781,9 @@ Rules:
 5. If the provided information is insufficient, say so clearly and set confidence below 0.3.
 6. Keep the answer concise -- 1-5 sentences.
 7. If transcript context is provided, use it to enrich the answer but cite the structured facts.
-8. Temporal awareness: prefer recent facts over old ones.`
+8. Temporal awareness: prefer recent facts over old ones.
+9. Data quality awareness: A "Data Quality" section may be included in the input. Use it to calibrate your confidence:
+   - If average confidence < 0.6 or fewer than 3 facts found, set your confidence below 0.5 and add a caveat (e.g. "Based on limited/low-confidence data: ...").
+   - If superseded facts are present, note this and prefer non-superseded facts.
+   - If age spread > 30 days, consider that older facts may be outdated.
+   - If source diversity = 1, note that all information comes from a single source.`

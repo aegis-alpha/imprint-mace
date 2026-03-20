@@ -1,7 +1,7 @@
 # Imprint as OpenClaw Memory Backend -- Test Deployment
 
 Test deployment for BVP-277. Validates Imprint as OpenClaw memory backend
-before touching production Kevin on Hetzner.
+before touching production on publick .
 
 ## Architecture
 

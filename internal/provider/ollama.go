@@ -85,9 +85,13 @@ func (p *Ollama) Send(ctx context.Context, req Request) (*Response, error) {
 		return nil, fmt.Errorf("status %d: %s", httpResp.StatusCode, truncate(string(respBody), 200))
 	}
 
+	if len(respBody) == 0 {
+		return nil, fmt.Errorf("empty response body (status %d)", httpResp.StatusCode)
+	}
+
 	var ollamaResp ollamaResponse
 	if err := json.Unmarshal(respBody, &ollamaResp); err != nil {
-		return nil, fmt.Errorf("parse response: %w", err)
+		return nil, fmt.Errorf("parse response (len=%d): %w", len(respBody), err)
 	}
 
 	if ollamaResp.Message.Content == "" {
