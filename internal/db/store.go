@@ -71,6 +71,10 @@ type Store interface {
 	ListQueryLogs(ctx context.Context, limit int) ([]QueryLog, error)
 	QueryLogStats(ctx context.Context, windowDays int) (*QueryLogStatsResult, error)
 
+	// Eval runs (BVP-308)
+	CreateEvalRun(ctx context.Context, r *EvalRun) error
+	LatestEvalRun(ctx context.Context, evalType string) (*EvalRun, error)
+
 	// Fact citations (BVP-279, D-Q1)
 	CreateFactCitation(ctx context.Context, factID, queryID string) error
 
@@ -258,6 +262,17 @@ type QueryLogStatsResult struct {
 	AvgContextLatency float64
 	ErrorCount       int
 	EmbedderAvailPct float64
+}
+
+type EvalRun struct {
+	ID            string
+	EvalType      string // "extraction" or "retrieval"
+	Score         float64
+	Score2        float64 // MRR for retrieval, 0 for extraction
+	Report        string  // full JSON
+	PromptHash    string
+	ExamplesCount int
+	CreatedAt     time.Time
 }
 
 type TaxonomyProposal struct {

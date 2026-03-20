@@ -614,6 +614,14 @@ func (e *errStore) CreateQueryLog(_ context.Context, _ *db.QueryLog) error {
 	return nil
 }
 
+func (e *errStore) CreateEvalRun(_ context.Context, _ *db.EvalRun) error {
+	return nil
+}
+
+func (e *errStore) LatestEvalRun(_ context.Context, _ string) (*db.EvalRun, error) {
+	return nil, errors.New("no eval runs")
+}
+
 // --- method not allowed ---
 
 func TestMethodNotAllowed(t *testing.T) {

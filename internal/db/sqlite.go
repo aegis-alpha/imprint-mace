@@ -1535,7 +1535,7 @@ func (s *SQLiteStore) Reset(ctx context.Context) error {
 		"fact_connections", "relationships", "consolidations",
 		"taxonomy_signals", "taxonomy_proposals",
 		"extraction_log", "ingested_files", "query_log",
-		"quality_signals", "fact_citations",
+		"quality_signals", "fact_citations", "eval_runs",
 		"transcript_chunks", "transcripts",
 		"facts", "entities",
 		"schema_migrations",
@@ -1709,6 +1709,37 @@ func (s *SQLiteStore) CreateFactCitation(ctx context.Context, factID, queryID st
 		factID, queryID,
 	)
 	return err
+}
+
+// --- Eval runs ---
+
+func (s *SQLiteStore) CreateEvalRun(ctx context.Context, r *EvalRun) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO eval_runs (id, eval_type, score, score2, report, prompt_hash, examples_count, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.EvalType, r.Score, r.Score2, r.Report, r.PromptHash, r.ExamplesCount,
+		r.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	)
+	return err
+}
+
+func (s *SQLiteStore) LatestEvalRun(ctx context.Context, evalType string) (*EvalRun, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, eval_type, score, score2, prompt_hash, examples_count, created_at
+		FROM eval_runs WHERE eval_type = ? ORDER BY created_at DESC LIMIT 1`, evalType)
+
+	var r EvalRun
+	var createdAt string
+	var score2 *float64
+	err := row.Scan(&r.ID, &r.EvalType, &r.Score, &score2, &r.PromptHash, &r.ExamplesCount, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	if score2 != nil {
+		r.Score2 = *score2
+	}
+	r.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
+	return &r, nil
 }
 
 // --- Query log ---

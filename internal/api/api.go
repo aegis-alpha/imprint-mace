@@ -106,10 +106,23 @@ func (h *Handler) methodDELETE(handler http.HandlerFunc) http.HandlerFunc {
 }
 
 type statusResponse struct {
-	Version       string                   `json:"version"`
-	Stats         *db.DBStats              `json:"stats"`
+	Version        string                   `json:"version"`
+	Stats          *db.DBStats              `json:"stats"`
 	QualitySignals []qualitySignalResponse  `json:"quality_signals,omitempty"`
-	QueryStats    *db.QueryLogStatsResult   `json:"query_stats,omitempty"`
+	QueryStats     *db.QueryLogStatsResult  `json:"query_stats,omitempty"`
+	EvalScores     *evalScoresResponse      `json:"eval_scores,omitempty"`
+}
+
+type evalScoresResponse struct {
+	Extraction *evalScoreEntry `json:"extraction,omitempty"`
+	Retrieval  *evalScoreEntry `json:"retrieval,omitempty"`
+}
+
+type evalScoreEntry struct {
+	Score    float64 `json:"score"`
+	Score2   float64 `json:"score2,omitempty"`
+	Examples int     `json:"examples"`
+	Date     string  `json:"date"`
 }
 
 type qualitySignalResponse struct {
@@ -154,6 +167,23 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	qStats, err := h.store.QueryLogStats(ctx, 30)
 	if err == nil && (qStats.TotalQueries > 0 || qStats.TotalContext > 0) {
 		resp.QueryStats = qStats
+	}
+
+	var evalScores evalScoresResponse
+	if ex, err := h.store.LatestEvalRun(ctx, "extraction"); err == nil {
+		evalScores.Extraction = &evalScoreEntry{
+			Score: ex.Score, Examples: ex.ExamplesCount,
+			Date: ex.CreatedAt.Format(time.RFC3339),
+		}
+	}
+	if ret, err := h.store.LatestEvalRun(ctx, "retrieval"); err == nil {
+		evalScores.Retrieval = &evalScoreEntry{
+			Score: ret.Score, Score2: ret.Score2, Examples: ret.ExamplesCount,
+			Date: ret.CreatedAt.Format(time.RFC3339),
+		}
+	}
+	if evalScores.Extraction != nil || evalScores.Retrieval != nil {
+		resp.EvalScores = &evalScores
 	}
 
 	writeJSON(w, http.StatusOK, resp)

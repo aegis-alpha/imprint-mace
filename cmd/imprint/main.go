@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -593,6 +594,7 @@ func runStatus(logger *slog.Logger, cfgPath string) {
 
 	printQualitySignals(ctx, store, cfg.EffectiveQualityConfig())
 	printQueryStats(ctx, store)
+	printEvalScores(ctx, store)
 }
 
 func printQualitySignals(ctx context.Context, store *db.SQLiteStore, qcfg config.QualityConfig) {
@@ -648,6 +650,24 @@ func printQueryStats(ctx context.Context, store *db.SQLiteStore) {
 		stats.AvgQueryLatency, stats.AvgContextLatency)
 	fmt.Printf("  Error rate:       %.1f%%\n", errorRate)
 	fmt.Printf("  Embedder avail:   %.1f%%\n", stats.EmbedderAvailPct)
+}
+
+func printEvalScores(ctx context.Context, store *db.SQLiteStore) {
+	extraction, exErr := store.LatestEvalRun(ctx, "extraction")
+	retrieval, retErr := store.LatestEvalRun(ctx, "retrieval")
+	if exErr != nil && retErr != nil {
+		return
+	}
+
+	fmt.Printf("\nEval Scores:\n")
+	if extraction != nil {
+		fmt.Printf("  Extraction: composite=%.4f  (%d examples, %s)\n",
+			extraction.Score, extraction.ExamplesCount, extraction.CreatedAt.Format("2006-01-02 15:04"))
+	}
+	if retrieval != nil {
+		fmt.Printf("  Retrieval:  recall@10=%.4f  mrr=%.4f  (%d questions, %s)\n",
+			retrieval.Score, retrieval.Score2, retrieval.ExamplesCount, retrieval.CreatedAt.Format("2006-01-02 15:04"))
+	}
 }
 
 func runEmbedBackfill(logger *slog.Logger, cfgPath, modelFilter string) {
@@ -1218,6 +1238,8 @@ func runEval(logger *slog.Logger, cfgPath, goldenDir, format string) {
 	default:
 		impeval.WriteTable(os.Stdout, report)
 	}
+
+	persistExtractionEval(ctx, logger, cfg, report, evalPromptPath)
 }
 
 func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bool) {
@@ -1309,6 +1331,63 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 	default:
 		impeval.WriteRetrievalTable(os.Stdout, report)
 	}
+
+	persistRetrievalEval(ctx, logger, cfg, report)
+}
+
+func persistExtractionEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.Report, promptPath string) {
+	store := openStore(logger, cfg)
+	defer store.Close()
+
+	reportJSON, err := json.Marshal(report)
+	if err != nil {
+		logger.Warn("failed to marshal eval report for persistence", "error", err)
+		return
+	}
+
+	promptData, _ := os.ReadFile(promptPath)
+	promptHash := fmt.Sprintf("%x", sha256.Sum256(promptData))
+
+	run := &db.EvalRun{
+		ID:            db.NewID(),
+		EvalType:      "extraction",
+		Score:         report.Composite,
+		ExamplesCount: report.GoldenCount,
+		Report:        string(reportJSON),
+		PromptHash:    promptHash,
+		CreatedAt:     time.Now().UTC(),
+	}
+	if err := store.CreateEvalRun(ctx, run); err != nil {
+		logger.Warn("failed to persist eval run", "error", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Eval run saved (composite=%.4f, id=%s)\n", run.Score, run.ID)
+}
+
+func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.RetrievalReport) {
+	store := openStore(logger, cfg)
+	defer store.Close()
+
+	reportJSON, err := json.Marshal(report)
+	if err != nil {
+		logger.Warn("failed to marshal retrieval report for persistence", "error", err)
+		return
+	}
+
+	run := &db.EvalRun{
+		ID:            db.NewID(),
+		EvalType:      "retrieval",
+		Score:         report.RecallAt10,
+		Score2:        report.MRR,
+		ExamplesCount: report.TotalQuestions,
+		Report:        string(reportJSON),
+		CreatedAt:     time.Now().UTC(),
+	}
+	if err := store.CreateEvalRun(ctx, run); err != nil {
+		logger.Warn("failed to persist retrieval eval run", "error", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Retrieval eval run saved (recall@10=%.4f, mrr=%.4f, id=%s)\n", run.Score, run.Score2, run.ID)
 }
 
 func runOptimizeCmd(logger *slog.Logger, cfgPath string) {
