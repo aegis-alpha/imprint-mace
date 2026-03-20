@@ -1790,6 +1790,125 @@ func (s *SQLiteStore) QueryLogStats(ctx context.Context, windowDays int) (*Query
 	return &result, nil
 }
 
+func (s *SQLiteStore) UpsertProviderModel(ctx context.Context, m *ProviderModel) error {
+	avail := 0
+	if m.Available {
+		avail = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO provider_models (provider_name, model_id, context_window, available, last_checked)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(provider_name, model_id) DO UPDATE SET
+			context_window = excluded.context_window,
+			available = excluded.available,
+			last_checked = excluded.last_checked`,
+		m.ProviderName, m.ModelID, m.ContextWindow, avail, timeStr(m.LastChecked),
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListProviderModels(ctx context.Context, providerName string) ([]ProviderModel, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT provider_name, model_id, context_window, available, last_checked
+		FROM provider_models
+		WHERE provider_name = ? AND available = 1
+		ORDER BY model_id`, providerName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var models []ProviderModel
+	for rows.Next() {
+		var m ProviderModel
+		var avail int
+		var lastCheckedStr string
+		if err := rows.Scan(&m.ProviderName, &m.ModelID, &m.ContextWindow, &avail, &lastCheckedStr); err != nil {
+			return nil, err
+		}
+		m.Available = avail == 1
+		m.LastChecked, _ = time.Parse("2006-01-02 15:04:05", lastCheckedStr)
+		models = append(models, m)
+	}
+	return models, rows.Err()
+}
+
+func (s *SQLiteStore) UpsertProviderHealth(ctx context.Context, h *ProviderHealth) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO provider_health (provider_name, task_type, configured_model, active_model, status, last_error, last_checked, switched_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider_name, task_type) DO UPDATE SET
+			configured_model = excluded.configured_model,
+			active_model = excluded.active_model,
+			status = excluded.status,
+			last_error = excluded.last_error,
+			last_checked = excluded.last_checked,
+			switched_at = excluded.switched_at`,
+		h.ProviderName, h.TaskType, h.ConfiguredModel, h.ActiveModel,
+		h.Status, nilIfEmpty(h.LastError), timeStr(h.LastChecked), timePtr(h.SwitchedAt),
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListProviderHealth(ctx context.Context) ([]ProviderHealth, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT provider_name, task_type, configured_model, active_model, status, last_error, last_checked, switched_at
+		FROM provider_health
+		ORDER BY provider_name, task_type`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []ProviderHealth
+	for rows.Next() {
+		h, err := scanProviderHealth(rows)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, h)
+	}
+	return results, rows.Err()
+}
+
+func (s *SQLiteStore) GetProviderHealth(ctx context.Context, providerName, taskType string) (*ProviderHealth, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT provider_name, task_type, configured_model, active_model, status, last_error, last_checked, switched_at
+		FROM provider_health
+		WHERE provider_name = ? AND task_type = ?`, providerName, taskType)
+	h, err := scanProviderHealth(row)
+	if err == sql.ErrNoRows {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
+type scannable interface {
+	Scan(dest ...any) error
+}
+
+func scanProviderHealth(s scannable) (ProviderHealth, error) {
+	var h ProviderHealth
+	var lastError sql.NullString
+	var lastCheckedStr string
+	var switchedAtStr sql.NullString
+	err := s.Scan(&h.ProviderName, &h.TaskType, &h.ConfiguredModel, &h.ActiveModel,
+		&h.Status, &lastError, &lastCheckedStr, &switchedAtStr)
+	if err != nil {
+		return h, err
+	}
+	if lastError.Valid {
+		h.LastError = lastError.String
+	}
+	h.LastChecked, _ = time.Parse("2006-01-02 15:04:05", lastCheckedStr)
+	if switchedAtStr.Valid {
+		t, _ := time.Parse("2006-01-02 15:04:05", switchedAtStr.String)
+		h.SwitchedAt = &t
+	}
+	return h, nil
+}
+
 func (s *SQLiteStore) Stats(ctx context.Context) (*DBStats, error) {
 	var stats DBStats
 	row := s.db.QueryRowContext(ctx, `

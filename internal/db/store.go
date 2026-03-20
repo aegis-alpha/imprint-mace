@@ -115,6 +115,15 @@ type Store interface {
 	DeleteFactsBySourcePattern(ctx context.Context, pattern string) (int64, error)
 	DeduplicateEntities(ctx context.Context) (groups int, removed int, err error)
 
+	// Provider models (BVP-303)
+	UpsertProviderModel(ctx context.Context, m *ProviderModel) error
+	ListProviderModels(ctx context.Context, providerName string) ([]ProviderModel, error)
+
+	// Provider health (BVP-303)
+	UpsertProviderHealth(ctx context.Context, h *ProviderHealth) error
+	ListProviderHealth(ctx context.Context) ([]ProviderHealth, error)
+	GetProviderHealth(ctx context.Context, providerName, taskType string) (*ProviderHealth, error)
+
 	// Stats
 	Stats(ctx context.Context) (*DBStats, error)
 
@@ -263,4 +272,23 @@ type TaxonomyProposal struct {
 	SignalIDs     string // JSON array of signal IDs
 	CreatedAt     time.Time
 	ResolvedAt    *time.Time
+}
+
+type ProviderModel struct {
+	ProviderName  string
+	ModelID       string
+	ContextWindow int
+	Available     bool
+	LastChecked   time.Time
+}
+
+type ProviderHealth struct {
+	ProviderName    string
+	TaskType        string
+	ConfiguredModel string
+	ActiveModel     string
+	Status          string // "ok", "degraded", "unavailable"
+	LastError       string
+	LastChecked     time.Time
+	SwitchedAt      *time.Time
 }
