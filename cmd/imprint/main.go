@@ -1234,7 +1234,8 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 			}
 
 			fmt.Fprintf(os.Stderr, "Embedding %d seed facts...\n", nf)
-			for _, f := range seed.Facts {
+			for i := range seed.Facts {
+				f := &seed.Facts[i]
 				vec, err := embChain.Embed(ctx, f.Content)
 				if err != nil {
 					logger.Warn("embed seed fact failed", "fact_id", f.ID, "error", err)

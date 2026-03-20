@@ -107,13 +107,13 @@ func (q *Querier) Retrieve(ctx context.Context, question string) (*RetrievalResu
 	}
 
 	out := make([]RankedFact, len(ranked))
-	for i, rf := range ranked {
+	for i := range ranked {
 		out[i] = RankedFact{
-			Fact:       rf.fact,
-			Score:      rf.score,
-			FromVector: vectorIDs[rf.fact.ID],
-			FromText:   textIDs[rf.fact.ID],
-			FromGraph:  graphIDs[rf.fact.ID],
+			Fact:       ranked[i].fact,
+			Score:      ranked[i].score,
+			FromVector: vectorIDs[ranked[i].fact.ID],
+			FromText:   textIDs[ranked[i].fact.ID],
+			FromGraph:  graphIDs[ranked[i].fact.ID],
 		}
 	}
 

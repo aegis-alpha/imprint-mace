@@ -167,9 +167,9 @@ func RunRetrieval(ctx context.Context, retriever Retriever, examples []Retrieval
 		}
 
 		retrievedIDs := map[string]bool{}
-		for _, rf := range topFacts {
-			retrievedIDs[rf.Fact.ID] = true
-			er.FoundFacts = append(er.FoundFacts, rf.Fact.ID)
+		for j := range topFacts {
+			retrievedIDs[topFacts[j].Fact.ID] = true
+			er.FoundFacts = append(er.FoundFacts, topFacts[j].Fact.ID)
 		}
 
 		found := 0
@@ -195,7 +195,8 @@ func RunRetrieval(ctx context.Context, retriever Retriever, examples []Retrieval
 		catRecalls[ex.Category] = append(catRecalls[ex.Category], recall)
 		catMRRs[ex.Category] = append(catMRRs[ex.Category], rr)
 
-		for _, rf := range topFacts {
+		for j := range topFacts {
+			rf := &topFacts[j]
 			if !isExpected(rf.Fact.ID, ex.ExpectedFacts) {
 				continue
 			}
@@ -219,13 +220,14 @@ func RunRetrieval(ctx context.Context, retriever Retriever, examples []Retrieval
 			if rf.FromGraph {
 				layers++
 			}
-			if layers > 1 {
+			switch {
+			case layers > 1:
 				layerStats.MultiLayer++
-			} else if rf.FromVector {
+			case rf.FromVector:
 				layerStats.VectorOnly++
-			} else if rf.FromText {
+			case rf.FromText:
 				layerStats.TextOnly++
-			} else if rf.FromGraph {
+			case rf.FromGraph:
 				layerStats.GraphOnly++
 			}
 		}
@@ -276,8 +278,8 @@ func reciprocalRank(ranked []query.RankedFact, expectedIDs []string) float64 {
 	for _, id := range expectedIDs {
 		expected[id] = true
 	}
-	for i, rf := range ranked {
-		if expected[rf.Fact.ID] {
+	for i := range ranked {
+		if expected[ranked[i].Fact.ID] {
 			return 1.0 / float64(i+1)
 		}
 	}

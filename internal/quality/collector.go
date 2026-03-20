@@ -372,9 +372,10 @@ func (c *Collector) collectConfidenceCalibration(ctx context.Context) (int, erro
 		if idx < 0 {
 			idx = 0
 		}
-		bins[idx].totalConf += conf
-		bins[idx].superseded += superseded
-		bins[idx].count++
+		b := &bins[idx] //nolint:gosec // idx is bounds-checked above
+		b.totalConf += conf
+		b.superseded += superseded
+		b.count++
 		totalFacts++
 	}
 	if err := rows.Err(); err != nil {
@@ -456,9 +457,10 @@ func (c *Collector) collectConfidenceCitationCalibration(ctx context.Context) (i
 		if idx < 0 {
 			idx = 0
 		}
-		bins[idx].totalConf += conf
-		bins[idx].cited += cited
-		bins[idx].count++
+		b := &bins[idx] //nolint:gosec // idx is bounds-checked above
+		b.totalConf += conf
+		b.cited += cited
+		b.count++
 		totalFacts++
 	}
 	if err := rows.Err(); err != nil {
