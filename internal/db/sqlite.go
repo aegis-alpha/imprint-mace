@@ -1536,6 +1536,7 @@ func (s *SQLiteStore) Reset(ctx context.Context) error {
 		"taxonomy_signals", "taxonomy_proposals",
 		"extraction_log", "ingested_files", "query_log",
 		"quality_signals", "fact_citations", "eval_runs",
+		"provider_ops", "retry_queue", "provider_health", "provider_models",
 		"transcript_chunks", "transcripts",
 		"facts", "entities",
 		"schema_migrations",
@@ -1938,6 +1939,171 @@ func scanProviderHealth(s scannable) (ProviderHealth, error) {
 		h.SwitchedAt = &t
 	}
 	return h, nil
+}
+
+// --- Provider Ops (BVP-305) ---
+
+func (s *SQLiteStore) UpsertProviderOps(ctx context.Context, ops *ProviderOps) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO provider_ops (provider_name, status, retry_count, max_retries, last_error, error_type, next_check_at, last_success, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(provider_name) DO UPDATE SET
+			status = excluded.status,
+			retry_count = excluded.retry_count,
+			max_retries = excluded.max_retries,
+			last_error = excluded.last_error,
+			error_type = excluded.error_type,
+			next_check_at = excluded.next_check_at,
+			last_success = COALESCE(excluded.last_success, provider_ops.last_success),
+			updated_at = excluded.updated_at`,
+		ops.ProviderName, ops.Status, ops.RetryCount, ops.MaxRetries,
+		nilIfEmpty(ops.LastError), nilIfEmpty(ops.ErrorType),
+		timePtr(ops.NextCheckAt), timePtr(ops.LastSuccess),
+		timeStr(ops.CreatedAt), timeStr(ops.UpdatedAt),
+	)
+	return err
+}
+
+func (s *SQLiteStore) GetProviderOps(ctx context.Context, providerName string) (*ProviderOps, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT provider_name, status, retry_count, max_retries, last_error, error_type,
+			next_check_at, last_success, created_at, updated_at
+		FROM provider_ops WHERE provider_name = ?`, providerName)
+	ops, err := scanProviderOps(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &ops, nil
+}
+
+func (s *SQLiteStore) ListProviderOps(ctx context.Context) ([]ProviderOps, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT provider_name, status, retry_count, max_retries, last_error, error_type,
+			next_check_at, last_success, created_at, updated_at
+		FROM provider_ops ORDER BY provider_name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []ProviderOps
+	for rows.Next() {
+		ops, err := scanProviderOps(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, ops)
+	}
+	return result, rows.Err()
+}
+
+func scanProviderOps(s scannable) (ProviderOps, error) {
+	var ops ProviderOps
+	var lastError, errorType, nextCheckAt, lastSuccess sql.NullString
+	var createdAtStr, updatedAtStr string
+	err := s.Scan(&ops.ProviderName, &ops.Status, &ops.RetryCount, &ops.MaxRetries,
+		&lastError, &errorType, &nextCheckAt, &lastSuccess, &createdAtStr, &updatedAtStr)
+	if err != nil {
+		return ops, err
+	}
+	ops.LastError = lastError.String
+	ops.ErrorType = errorType.String
+	if nextCheckAt.Valid {
+		if t := parseTime(nextCheckAt.String); t != nil {
+			ops.NextCheckAt = t
+		}
+	}
+	if lastSuccess.Valid {
+		if t := parseTime(lastSuccess.String); t != nil {
+			ops.LastSuccess = t
+		}
+	}
+	ops.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
+	ops.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAtStr)
+	return ops, nil
+}
+
+// --- Retry Queue (BVP-305) ---
+
+func (s *SQLiteStore) EnqueueRetry(ctx context.Context, entry *RetryEntry) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO retry_queue (id, task_type, payload, created_at, retry_count, last_error, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		entry.ID, entry.TaskType, entry.Payload, timeStr(entry.CreatedAt),
+		entry.RetryCount, nilIfEmpty(entry.LastError), entry.Status,
+	)
+	return err
+}
+
+func (s *SQLiteStore) DequeueRetries(ctx context.Context, limit int) ([]RetryEntry, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, task_type, payload, created_at, retry_count, last_error, status
+		FROM retry_queue WHERE status = 'pending'
+		ORDER BY created_at ASC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []RetryEntry
+	for rows.Next() {
+		var e RetryEntry
+		var createdAtStr string
+		var lastError sql.NullString
+		if err := rows.Scan(&e.ID, &e.TaskType, &e.Payload, &createdAtStr,
+			&e.RetryCount, &lastError, &e.Status); err != nil {
+			return nil, err
+		}
+		e.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAtStr)
+		e.LastError = lastError.String
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range entries {
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE retry_queue SET status = 'processing' WHERE id = ?", entries[i].ID); err != nil {
+			return nil, err
+		}
+		entries[i].Status = "processing"
+	}
+
+	return entries, tx.Commit()
+}
+
+func (s *SQLiteStore) UpdateRetryStatus(ctx context.Context, id, status, lastError string) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE retry_queue SET status = ?, last_error = ? WHERE id = ?",
+		status, nilIfEmpty(lastError), id)
+	return err
+}
+
+func (s *SQLiteStore) ExpireOldRetries(ctx context.Context, olderThan time.Time) (int64, error) {
+	result, err := s.db.ExecContext(ctx,
+		"UPDATE retry_queue SET status = 'expired' WHERE status = 'pending' AND created_at < ?",
+		timeStr(olderThan))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *SQLiteStore) RetryQueueDepth(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM retry_queue WHERE status IN ('pending', 'processing')").Scan(&count)
+	return count, err
 }
 
 func (s *SQLiteStore) Stats(ctx context.Context) (*DBStats, error) {

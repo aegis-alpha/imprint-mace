@@ -828,6 +828,8 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 	store := openStore(logger, cfg)
 	defer store.Close()
 
+	runHealthCheckAtStartup(logger, cfg, store)
+
 	eng := createEngine(logger, cfg, store)
 	q := createQuerier(logger, cfg, store)
 	builder := createBuilder(cfg, store, logger)
@@ -869,6 +871,24 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		defer cancel()
 		go w.Run(ctx)
 		logger.Info("file watcher started", "path", watchDir)
+	}
+
+	healthCfg := cfg.EffectiveHealthConfig()
+	if healthCfg.CatalogRefreshDays > 0 {
+		refreshCtx, refreshCancel := context.WithCancel(context.Background())
+		defer refreshCancel()
+		go func() {
+			interval := time.Duration(healthCfg.CatalogRefreshDays) * 24 * time.Hour
+			for {
+				select {
+				case <-refreshCtx.Done():
+					return
+				case <-time.After(interval):
+					runHealthCheckAtStartup(logger, cfg, store)
+				}
+			}
+		}()
+		logger.Info("catalog refresh goroutine started", "interval_days", healthCfg.CatalogRefreshDays)
 	}
 
 	if cfg.Consolidation.IntervalMinutes > 0 && len(cfg.Providers.Consolidation) > 0 {
@@ -959,6 +979,39 @@ func runMCP(logger *slog.Logger, cfgPath string) {
 	if err := srv.Run(context.Background()); err != nil {
 		logger.Error("mcp server failed", "error", err)
 		os.Exit(1)
+	}
+}
+
+func runHealthCheckAtStartup(logger *slog.Logger, cfg *config.Config, store db.Store) {
+	taskConfigs := map[string][]model.ProviderConfig{
+		"extraction":    cfg.Providers.Extraction,
+		"consolidation": cfg.Providers.Consolidation,
+		"query":         cfg.Providers.Query,
+		"embedding":     cfg.Providers.Embedding,
+	}
+	listers := provider.NewModelListersFromConfig(taskConfigs)
+	if len(listers) == 0 {
+		return
+	}
+
+	configs := make(map[string]map[string]string)
+	for task, providerCfgs := range taskConfigs {
+		for _, pc := range providerCfgs {
+			if configs[pc.Name] == nil {
+				configs[pc.Name] = make(map[string]string)
+			}
+			configs[pc.Name][task] = pc.Model
+		}
+	}
+
+	hc := provider.NewHealthChecker(store, listers, configs, logger)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := hc.CheckAll(ctx); err != nil {
+		logger.Warn("startup health check failed", "error", err)
+	} else {
+		logger.Info("startup health check complete")
 	}
 }
 

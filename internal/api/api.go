@@ -106,11 +106,23 @@ func (h *Handler) methodDELETE(handler http.HandlerFunc) http.HandlerFunc {
 }
 
 type statusResponse struct {
-	Version        string                   `json:"version"`
-	Stats          *db.DBStats              `json:"stats"`
-	QualitySignals []qualitySignalResponse  `json:"quality_signals,omitempty"`
-	QueryStats     *db.QueryLogStatsResult  `json:"query_stats,omitempty"`
-	EvalScores     *evalScoresResponse      `json:"eval_scores,omitempty"`
+	Version         string                    `json:"version"`
+	Stats           *db.DBStats               `json:"stats"`
+	QualitySignals  []qualitySignalResponse   `json:"quality_signals,omitempty"`
+	QueryStats      *db.QueryLogStatsResult   `json:"query_stats,omitempty"`
+	EvalScores      *evalScoresResponse       `json:"eval_scores,omitempty"`
+	Providers       []providerHealthResponse  `json:"providers,omitempty"`
+	RetryQueueDepth int                       `json:"retry_queue_depth,omitempty"`
+}
+
+type providerHealthResponse struct {
+	ProviderName    string `json:"provider_name"`
+	TaskType        string `json:"task_type"`
+	ConfiguredModel string `json:"configured_model"`
+	ActiveModel     string `json:"active_model"`
+	Status          string `json:"status"`
+	LastError       string `json:"last_error,omitempty"`
+	RetryCount      int    `json:"retry_count,omitempty"`
 }
 
 type evalScoresResponse struct {
@@ -184,6 +196,38 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if evalScores.Extraction != nil || evalScores.Retrieval != nil {
 		resp.EvalScores = &evalScores
+	}
+
+	healthEntries, err := h.store.ListProviderHealth(ctx)
+	if err == nil && len(healthEntries) > 0 {
+		ops, _ := h.store.ListProviderOps(ctx)
+		opsMap := make(map[string]*db.ProviderOps, len(ops))
+		for i := range ops {
+			opsMap[ops[i].ProviderName] = &ops[i]
+		}
+
+		for _, ph := range healthEntries {
+			phr := providerHealthResponse{
+				ProviderName:    ph.ProviderName,
+				TaskType:        ph.TaskType,
+				ConfiguredModel: ph.ConfiguredModel,
+				ActiveModel:     ph.ActiveModel,
+				Status:          ph.Status,
+				LastError:       ph.LastError,
+			}
+			if o, ok := opsMap[ph.ProviderName]; ok {
+				if o.Status != "ok" {
+					phr.Status = o.Status
+					phr.LastError = o.LastError
+				}
+				phr.RetryCount = o.RetryCount
+			}
+			resp.Providers = append(resp.Providers, phr)
+		}
+	}
+
+	if depth, err := h.store.RetryQueueDepth(ctx); err == nil && depth > 0 {
+		resp.RetryQueueDepth = depth
 	}
 
 	writeJSON(w, http.StatusOK, resp)

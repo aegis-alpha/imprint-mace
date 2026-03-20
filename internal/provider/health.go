@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/db"
@@ -23,6 +24,7 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 	now := time.Now().UTC().Truncate(time.Second)
 
 	availableByProvider := make(map[string]map[string]bool)
+	modelListByProvider := make(map[string][]string)
 
 	for _, lister := range h.listers {
 		name := lister.ProviderName()
@@ -60,6 +62,12 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 		}
 		availableByProvider[name] = available
 
+		ids := make([]string, len(models))
+		for i, m := range models {
+			ids[i] = m.ID
+		}
+		modelListByProvider[name] = ids
+
 		h.logger.Info("health check complete", "provider", name, "models_found", len(models))
 	}
 
@@ -69,6 +77,8 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 			continue
 		}
 
+		models := modelListByProvider[providerName]
+
 		for task, configuredModel := range tasks {
 			status := "ok"
 			activeModel := configuredModel
@@ -76,8 +86,12 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 
 			if !available[configuredModel] {
 				status = "degraded"
-				activeModel = ""
-				lastError = "model not found in provider model list"
+				activeModel = findSubstitute(configuredModel, models)
+				if activeModel == "" {
+					lastError = "model not found in provider model list, no substitute available"
+				} else {
+					lastError = "configured model not found, using substitute: " + activeModel
+				}
 			}
 
 			if err := h.store.UpsertProviderHealth(ctx, &db.ProviderHealth{
@@ -92,9 +106,27 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 				return err
 			}
 
-			h.logger.Info("provider health", "provider", providerName, "task", task, "status", status)
+			h.logger.Info("provider health", "provider", providerName, "task", task,
+				"status", status, "active_model", activeModel)
 		}
 	}
 
 	return nil
+}
+
+func findSubstitute(configured string, available []string) string {
+	parts := strings.Split(configured, "-")
+	for prefixLen := len(parts) - 1; prefixLen >= 1; prefixLen-- {
+		prefix := strings.Join(parts[:prefixLen], "-")
+		for _, m := range available {
+			if strings.HasPrefix(m, prefix) {
+				return m
+			}
+		}
+	}
+
+	if len(available) > 0 {
+		return available[0]
+	}
+	return ""
 }

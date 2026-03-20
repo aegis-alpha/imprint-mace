@@ -21,6 +21,7 @@ type Config struct {
 	Prompts       PromptPaths         `toml:"prompts"`
 	Context       ContextConfig       `toml:"context"`
 	Quality       QualityConfig       `toml:"quality"`
+	Health        HealthConfig        `toml:"health"`
 	OpenClaw      OpenClawConfig      `toml:"openclaw"`
 }
 
@@ -190,6 +191,30 @@ func (c *Config) EffectiveQualityConfig() QualityConfig {
 		q.MutationPromptPath = "prompts/mutation-prompt.md"
 	}
 	return q
+}
+
+type HealthConfig struct {
+	CatalogRefreshDays int `toml:"catalog_refresh_days"`
+	MaxRetries         int `toml:"max_retries"`
+	RetryIntervalHours int `toml:"retry_interval_hours"`
+	QueueTTLHours      int `toml:"queue_ttl_hours"`
+}
+
+func (c *Config) EffectiveHealthConfig() HealthConfig {
+	h := c.Health
+	if h.CatalogRefreshDays == 0 {
+		h.CatalogRefreshDays = 3
+	}
+	if h.MaxRetries == 0 {
+		h.MaxRetries = 5
+	}
+	if h.RetryIntervalHours == 0 {
+		h.RetryIntervalHours = 1
+	}
+	if h.QueueTTLHours == 0 {
+		h.QueueTTLHours = 24
+	}
+	return h
 }
 
 type OpenClawConfig struct {

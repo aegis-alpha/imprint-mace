@@ -128,6 +128,18 @@ type Store interface {
 	ListProviderHealth(ctx context.Context) ([]ProviderHealth, error)
 	GetProviderHealth(ctx context.Context, providerName, taskType string) (*ProviderHealth, error)
 
+	// Provider ops (BVP-305)
+	UpsertProviderOps(ctx context.Context, ops *ProviderOps) error
+	GetProviderOps(ctx context.Context, providerName string) (*ProviderOps, error)
+	ListProviderOps(ctx context.Context) ([]ProviderOps, error)
+
+	// Retry queue (BVP-305)
+	EnqueueRetry(ctx context.Context, entry *RetryEntry) error
+	DequeueRetries(ctx context.Context, limit int) ([]RetryEntry, error)
+	UpdateRetryStatus(ctx context.Context, id, status, lastError string) error
+	ExpireOldRetries(ctx context.Context, olderThan time.Time) (int64, error)
+	RetryQueueDepth(ctx context.Context) (int, error)
+
 	// Stats
 	Stats(ctx context.Context) (*DBStats, error)
 
@@ -306,4 +318,27 @@ type ProviderHealth struct {
 	LastError       string
 	LastChecked     time.Time
 	SwitchedAt      *time.Time
+}
+
+type ProviderOps struct {
+	ProviderName string
+	Status       string // "ok", "transient_error", "auth_error", "exhausted"
+	RetryCount   int
+	MaxRetries   int
+	LastError    string
+	ErrorType    string
+	NextCheckAt  *time.Time
+	LastSuccess  *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type RetryEntry struct {
+	ID         string
+	TaskType   string
+	Payload    string // JSON
+	CreatedAt  time.Time
+	RetryCount int
+	LastError  string
+	Status     string // "pending", "processing", "completed", "expired"
 }

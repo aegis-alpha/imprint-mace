@@ -89,8 +89,8 @@ func TestHealthChecker_ConfiguredModelMissing(t *testing.T) {
 	if h.Status != "degraded" {
 		t.Errorf("expected status degraded, got %s", h.Status)
 	}
-	if h.ActiveModel != "" {
-		t.Errorf("expected empty active_model, got %s", h.ActiveModel)
+	if h.ActiveModel != "gpt-5-mini" {
+		t.Errorf("expected prefix-matched active_model gpt-5-mini, got %s", h.ActiveModel)
 	}
 	if h.LastError == "" {
 		t.Error("expected last_error to be set")
@@ -121,6 +121,65 @@ func TestHealthChecker_ProviderUnreachable(t *testing.T) {
 	}
 	if h.LastError == "" {
 		t.Error("expected last_error to be set")
+	}
+}
+
+func TestHealthChecker_PrefixMatchSubstitution(t *testing.T) {
+	store := openTestStore(t)
+	lister := &mockModelLister{
+		name: "openai",
+		models: []ModelInfo{
+			{ID: "gpt-5-mini", ContextWindow: 64000},
+			{ID: "gpt-4o", ContextWindow: 128000},
+		},
+	}
+	configs := map[string]map[string]string{
+		"openai": {"extraction": "gpt-5-nano"},
+	}
+	hc := NewHealthChecker(store, []ModelLister{lister}, configs, slog.Default())
+
+	if err := hc.CheckAll(context.Background()); err != nil {
+		t.Fatalf("CheckAll: %v", err)
+	}
+
+	h, err := store.GetProviderHealth(context.Background(), "openai", "extraction")
+	if err != nil {
+		t.Fatalf("GetProviderHealth: %v", err)
+	}
+	if h.Status != "degraded" {
+		t.Errorf("expected status degraded, got %s", h.Status)
+	}
+	if h.ActiveModel != "gpt-5-mini" {
+		t.Errorf("expected prefix-matched active_model gpt-5-mini, got %s", h.ActiveModel)
+	}
+}
+
+func TestHealthChecker_PrefixMatchFallsBackToAny(t *testing.T) {
+	store := openTestStore(t)
+	lister := &mockModelLister{
+		name: "openai",
+		models: []ModelInfo{
+			{ID: "gpt-4o", ContextWindow: 128000},
+		},
+	}
+	configs := map[string]map[string]string{
+		"openai": {"extraction": "gpt-5-nano"},
+	}
+	hc := NewHealthChecker(store, []ModelLister{lister}, configs, slog.Default())
+
+	if err := hc.CheckAll(context.Background()); err != nil {
+		t.Fatalf("CheckAll: %v", err)
+	}
+
+	h, err := store.GetProviderHealth(context.Background(), "openai", "extraction")
+	if err != nil {
+		t.Fatalf("GetProviderHealth: %v", err)
+	}
+	if h.Status != "degraded" {
+		t.Errorf("expected status degraded, got %s", h.Status)
+	}
+	if h.ActiveModel != "gpt-4o" {
+		t.Errorf("expected fallback active_model gpt-4o, got %s", h.ActiveModel)
 	}
 }
 
