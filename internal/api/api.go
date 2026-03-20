@@ -106,18 +106,57 @@ func (h *Handler) methodDELETE(handler http.HandlerFunc) http.HandlerFunc {
 }
 
 type statusResponse struct {
-	Version string    `json:"version"`
-	Stats   *db.DBStats `json:"stats"`
+	Version       string                   `json:"version"`
+	Stats         *db.DBStats              `json:"stats"`
+	QualitySignals []qualitySignalResponse  `json:"quality_signals,omitempty"`
+	QueryStats    *db.QueryLogStatsResult   `json:"query_stats,omitempty"`
+}
+
+type qualitySignalResponse struct {
+	SignalType string  `json:"signal_type"`
+	Category   string  `json:"category"`
+	Value      float64 `json:"value"`
+	Details    string  `json:"details,omitempty"`
+	CreatedAt  string  `json:"created_at"`
 }
 
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.store.Stats(r.Context())
+	ctx := r.Context()
+	stats, err := h.store.Stats(ctx)
 	if err != nil {
 		h.logger.Error("stats failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "stats failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, statusResponse{Version: h.version, Stats: stats})
+
+	resp := statusResponse{Version: h.version, Stats: stats}
+
+	signals, err := h.store.ListQualitySignals(ctx, "", 100)
+	if err == nil && len(signals) > 0 {
+		type key struct{ st, cat string }
+		seen := map[key]bool{}
+		for _, s := range signals {
+			k := key{s.SignalType, s.Category}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			resp.QualitySignals = append(resp.QualitySignals, qualitySignalResponse{
+				SignalType: s.SignalType,
+				Category:   s.Category,
+				Value:      s.Value,
+				Details:    s.Details,
+				CreatedAt:  s.CreatedAt.Format(time.RFC3339),
+			})
+		}
+	}
+
+	qStats, err := h.store.QueryLogStats(ctx, 30)
+	if err == nil && (qStats.TotalQueries > 0 || qStats.TotalContext > 0) {
+		resp.QueryStats = qStats
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (h *Handler) handleEntities(w http.ResponseWriter, r *http.Request) {

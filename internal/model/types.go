@@ -139,9 +139,10 @@ type Consolidation struct {
 // --- Extraction ---
 
 type ExtractionResult struct {
-	Facts         []Fact         `json:"facts"`
-	Entities      []Entity       `json:"entities"`
-	Relationships []Relationship `json:"relationships"`
+	Facts           []Fact         `json:"facts"`
+	Entities        []Entity       `json:"entities"`
+	Relationships   []Relationship `json:"relationships"`
+	ExtractionLogID string         `json:"-"`
 }
 
 // --- Query ---

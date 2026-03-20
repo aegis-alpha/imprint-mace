@@ -1800,3 +1800,126 @@ func TestListFacts_CreatedAfter(t *testing.T) {
 		t.Errorf("expected recent fact, got %q", facts[0].Content)
 	}
 }
+
+// --- Query log ---
+
+func TestCreateQueryLog(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	l := &QueryLog{
+		ID:                 NewID(),
+		Endpoint:           "query",
+		Question:           "What is Acme?",
+		TotalLatencyMs:     250,
+		RetrievalLatencyMs: 80,
+		SynthesisLatencyMs: 170,
+		FactsFound:         5,
+		FactsByVector:      3,
+		FactsByText:        2,
+		FactsByGraph:       1,
+		ChunksByVector:     4,
+		ChunksByText:       2,
+		CitationsCount:     3,
+		EmbedderAvailable:  true,
+		CreatedAt:          time.Now(),
+	}
+	if err := store.CreateQueryLog(ctx, l); err != nil {
+		t.Fatalf("CreateQueryLog: %v", err)
+	}
+
+	logs, err := store.ListQueryLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListQueryLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	got := logs[0]
+	if got.Endpoint != "query" {
+		t.Errorf("endpoint: got %q, want %q", got.Endpoint, "query")
+	}
+	if got.TotalLatencyMs != 250 {
+		t.Errorf("total_latency_ms: got %d, want 250", got.TotalLatencyMs)
+	}
+	if got.FactsByVector != 3 {
+		t.Errorf("facts_by_vector: got %d, want 3", got.FactsByVector)
+	}
+	if got.ChunksByVector != 4 {
+		t.Errorf("chunks_by_vector: got %d, want 4", got.ChunksByVector)
+	}
+	if !got.EmbedderAvailable {
+		t.Error("embedder_available: got false, want true")
+	}
+	if got.Error != "" {
+		t.Errorf("error: got %q, want empty", got.Error)
+	}
+}
+
+func TestCreateQueryLog_WithError(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	l := &QueryLog{
+		ID:                NewID(),
+		Endpoint:          "query",
+		Question:          "broken query",
+		TotalLatencyMs:    50,
+		EmbedderAvailable: false,
+		Error:             "provider timeout",
+		CreatedAt:         time.Now(),
+	}
+	if err := store.CreateQueryLog(ctx, l); err != nil {
+		t.Fatalf("CreateQueryLog: %v", err)
+	}
+
+	logs, err := store.ListQueryLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListQueryLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 log, got %d", len(logs))
+	}
+	if logs[0].Error != "provider timeout" {
+		t.Errorf("error: got %q, want %q", logs[0].Error, "provider timeout")
+	}
+	if logs[0].EmbedderAvailable {
+		t.Error("embedder_available: got true, want false")
+	}
+}
+
+func TestQueryLogStats(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		store.CreateQueryLog(ctx, &QueryLog{
+			ID: NewID(), Endpoint: "query", TotalLatencyMs: 200,
+			EmbedderAvailable: true, CreatedAt: time.Now(),
+		})
+	}
+	for i := 0; i < 5; i++ {
+		store.CreateQueryLog(ctx, &QueryLog{
+			ID: NewID(), Endpoint: "context", TotalLatencyMs: 40,
+			EmbedderAvailable: true, CreatedAt: time.Now(),
+		})
+	}
+	store.CreateQueryLog(ctx, &QueryLog{
+		ID: NewID(), Endpoint: "query", TotalLatencyMs: 100,
+		EmbedderAvailable: false, Error: "timeout", CreatedAt: time.Now(),
+	})
+
+	stats, err := store.QueryLogStats(ctx, 30)
+	if err != nil {
+		t.Fatalf("QueryLogStats: %v", err)
+	}
+	if stats.TotalQueries != 4 {
+		t.Errorf("TotalQueries: got %d, want 4", stats.TotalQueries)
+	}
+	if stats.TotalContext != 5 {
+		t.Errorf("TotalContext: got %d, want 5", stats.TotalContext)
+	}
+	if stats.ErrorCount != 1 {
+		t.Errorf("ErrorCount: got %d, want 1", stats.ErrorCount)
+	}
+}

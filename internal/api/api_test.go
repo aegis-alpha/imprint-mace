@@ -610,6 +610,10 @@ func (e *errStore) ListFacts(_ context.Context, _ db.FactFilter) ([]model.Fact, 
 	return nil, errors.New("forced error")
 }
 
+func (e *errStore) CreateQueryLog(_ context.Context, _ *db.QueryLog) error {
+	return nil
+}
+
 // --- method not allowed ---
 
 func TestMethodNotAllowed(t *testing.T) {

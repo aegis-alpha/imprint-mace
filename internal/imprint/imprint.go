@@ -18,6 +18,8 @@ type IngestResult struct {
 	FactsCount         int
 	EntitiesCount      int
 	RelationshipsCount int
+	EntityCollisions   int
+	EntityCreations    int
 	FactIDs            []string
 	EntityIDs          []string
 	RelationshipIDs    []string
@@ -127,6 +129,7 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 		if err == nil && existing != nil {
 			nameToID[name] = existing.ID
 			result.EntityIDs = append(result.EntityIDs, existing.ID)
+			result.EntityCollisions++
 			continue
 		}
 		if err := e.store.CreateEntity(ctx, &extracted.Entities[i]); err != nil {
@@ -136,8 +139,15 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 		}
 		nameToID[name] = extracted.Entities[i].ID
 		result.EntityIDs = append(result.EntityIDs, extracted.Entities[i].ID)
+		result.EntityCreations++
 	}
 	result.EntitiesCount = len(result.EntityIDs)
+
+	if extracted.ExtractionLogID != "" && (result.EntityCollisions > 0 || result.EntityCreations > 0) {
+		if err := e.store.UpdateExtractionLogCollisions(ctx, extracted.ExtractionLogID, result.EntityCollisions, result.EntityCreations); err != nil {
+			e.logger.Warn("failed to update extraction log collisions", "error", err)
+		}
+	}
 
 	for i := range extracted.Facts {
 		var vec []float32

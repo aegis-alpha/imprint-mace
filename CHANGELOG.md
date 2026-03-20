@@ -4,6 +4,41 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.4.0] - 2026-03-20
+
+### Added
+
+- Extraction eval harness: CaRB-style P/R/F1, NRR, ECE, composite score, built-in golden dataset (42 examples)
+- Retrieval eval harness: Recall@10, MRR, per-layer contribution, noise rejection, graceful degradation delta
+- Built-in retrieval golden dataset: 32 facts, 33 entities, 21 questions across 5 categories
+- Quality signal collection: supersede rate, confidence mean, entity collision rate per fact type
+- Karpathy loop: automatic extraction prompt optimization (LLM mutation + eval gate, hourly rate limit)
+- query_log table: per-query metrics (latency breakdown, per-layer counts, embedder availability)
+- GET /relationships endpoint and imprint_relationships MCP tool (BVP-265)
+- Entity deduplication: case-insensitive merge with relationship re-pointing
+- Self-learning ingest filter: tracks rejected inputs for false-negative analysis
+- Admin API: POST /admin/reset, DELETE /admin/facts, POST /admin/deduplicate-entities
+- GET /status extended: quality signals + query stats (30-day aggregate)
+- CLI: eval, eval generate, eval-retrieval, optimize subcommands
+- Querier.Retrieve(): exported retrieval without LLM synthesis (for eval and programmatic use)
+- Config: [quality] section (enabled, thresholds, optimized_prompt_path, mutation_prompt_path)
+
+### Fixed
+
+- 22 code review findings (S037): supersede_reason column, FTS sanitizer refactor, lint fixes
+- Hook reliability: inline shared client (D29), periodic reachability recheck, timeout handling
+- Consolidation: validate fact IDs exist before creating connections
+- Deploy: Dockcheck replaces Watchtower, config.toml.example added
+- Entity name normalization and dedup error handling
+- Anthropic model name correction (claude-haiku-4 -> claude-haiku-4-5)
+
+### Changed
+
+- 345 tests (up from 253)
+- 15 CLI subcommands (up from 12)
+- MCP server: 8 tools (added imprint_relationships)
+- HTTP API: 12 endpoints (added /relationships, /admin/*, /status extended)
+
 ## [0.3.0] - 2026-03-17
 
 ### Added
@@ -89,6 +124,7 @@ Initial release.
 - CI: GitHub Actions (test on Ubuntu + macOS, Docker build on main, goreleaser on tag)
 - 232+ tests
 
+[0.4.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.4.0
 [0.3.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.3.0
 [0.2.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.2.0
 [0.1.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.1.0

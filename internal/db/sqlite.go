@@ -786,17 +786,19 @@ func (s *SQLiteStore) CreateExtractionLog(ctx context.Context, l *ExtractionLog)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO extraction_log (id, provider_name, model, input_length, tokens_used,
 			duration_ms, success, facts_count, entities_count, relationships_count,
+			entity_collisions, entity_creations,
 			error_type, error_message, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		l.ID, l.ProviderName, l.Model, l.InputLength, l.TokensUsed,
 		l.DurationMs, success, l.FactsCount, l.EntitiesCount, l.RelationshipsCount,
+		l.EntityCollisions, l.EntityCreations,
 		nilIfEmpty(l.ErrorType), nilIfEmpty(l.ErrorMessage), timeStr(l.CreatedAt),
 	)
 	return err
 }
 
 func (s *SQLiteStore) ListExtractionLogs(ctx context.Context, limit int) ([]ExtractionLog, error) {
-	q := "SELECT id, provider_name, model, input_length, tokens_used, duration_ms, success, facts_count, entities_count, relationships_count, error_type, error_message, created_at FROM extraction_log ORDER BY created_at DESC"
+	q := "SELECT id, provider_name, model, input_length, tokens_used, duration_ms, success, facts_count, entities_count, relationships_count, entity_collisions, entity_creations, error_type, error_message, created_at FROM extraction_log ORDER BY created_at DESC"
 	if limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -814,6 +816,7 @@ func (s *SQLiteStore) ListExtractionLogs(ctx context.Context, limit int) ([]Extr
 		var createdAtStr string
 		if err := rows.Scan(&l.ID, &l.ProviderName, &l.Model, &l.InputLength, &l.TokensUsed,
 			&l.DurationMs, &success, &l.FactsCount, &l.EntitiesCount, &l.RelationshipsCount,
+			&l.EntityCollisions, &l.EntityCreations,
 			&errType, &errMsg, &createdAtStr); err != nil {
 			return nil, err
 		}
@@ -826,6 +829,13 @@ func (s *SQLiteStore) ListExtractionLogs(ctx context.Context, limit int) ([]Extr
 		logs = append(logs, l)
 	}
 	return logs, rows.Err()
+}
+
+func (s *SQLiteStore) UpdateExtractionLogCollisions(ctx context.Context, logID string, collisions, creations int) error {
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE extraction_log SET entity_collisions = ?, entity_creations = ? WHERE id = ?",
+		collisions, creations, logID)
+	return err
 }
 
 // --- Taxonomy signals ---
@@ -1524,7 +1534,8 @@ func (s *SQLiteStore) Reset(ctx context.Context) error {
 		"facts_fts", "transcript_chunks_fts",
 		"fact_connections", "relationships", "consolidations",
 		"taxonomy_signals", "taxonomy_proposals",
-		"extraction_log", "ingested_files",
+		"extraction_log", "ingested_files", "query_log",
+		"quality_signals", "fact_citations",
 		"transcript_chunks", "transcripts",
 		"facts", "entities",
 		"schema_migrations",
@@ -1646,6 +1657,137 @@ func (s *SQLiteStore) DeduplicateEntities(ctx context.Context) (int, int, error)
 	}
 
 	return groups, totalRemoved, nil
+}
+
+// --- Quality signals (BVP-279) ---
+
+func (s *SQLiteStore) CreateQualitySignal(ctx context.Context, sig *QualitySignal) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO quality_signals (id, signal_type, category, value, details, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		sig.ID, sig.SignalType, sig.Category, sig.Value, sig.Details, timeStr(sig.CreatedAt),
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListQualitySignals(ctx context.Context, signalType string, limit int) ([]QualitySignal, error) {
+	q := "SELECT id, signal_type, category, value, details, created_at FROM quality_signals"
+	var args []any
+	if signalType != "" {
+		q += " WHERE signal_type = ?"
+		args = append(args, signalType)
+	}
+	q += " ORDER BY created_at DESC"
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var signals []QualitySignal
+	for rows.Next() {
+		var sig QualitySignal
+		var createdAtStr string
+		if err := rows.Scan(&sig.ID, &sig.SignalType, &sig.Category, &sig.Value, &sig.Details, &createdAtStr); err != nil {
+			return nil, err
+		}
+		if t := parseTime(createdAtStr); t != nil {
+			sig.CreatedAt = *t
+		}
+		signals = append(signals, sig)
+	}
+	return signals, rows.Err()
+}
+
+func (s *SQLiteStore) CreateFactCitation(ctx context.Context, factID, queryID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO fact_citations (fact_id, query_id, cited_at)
+		VALUES (?, ?, datetime('now'))`,
+		factID, queryID,
+	)
+	return err
+}
+
+// --- Query log ---
+
+func (s *SQLiteStore) CreateQueryLog(ctx context.Context, l *QueryLog) error {
+	embedder := 0
+	if l.EmbedderAvailable {
+		embedder = 1
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO query_log (id, endpoint, question, total_latency_ms, retrieval_latency_ms,
+			synthesis_latency_ms, facts_found, facts_by_vector, facts_by_text, facts_by_graph,
+			chunks_by_vector, chunks_by_text, citations_count, embedder_available, error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.ID, l.Endpoint, l.Question, l.TotalLatencyMs, l.RetrievalLatencyMs,
+		l.SynthesisLatencyMs, l.FactsFound, l.FactsByVector, l.FactsByText, l.FactsByGraph,
+		l.ChunksByVector, l.ChunksByText, l.CitationsCount, embedder, nilIfEmpty(l.Error),
+		timeStr(l.CreatedAt),
+	)
+	return err
+}
+
+func (s *SQLiteStore) ListQueryLogs(ctx context.Context, limit int) ([]QueryLog, error) {
+	q := `SELECT id, endpoint, question, total_latency_ms, retrieval_latency_ms,
+		synthesis_latency_ms, facts_found, facts_by_vector, facts_by_text, facts_by_graph,
+		chunks_by_vector, chunks_by_text, citations_count, embedder_available, error, created_at
+		FROM query_log ORDER BY created_at DESC`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := s.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []QueryLog
+	for rows.Next() {
+		var l QueryLog
+		var embedder int
+		var errStr sql.NullString
+		var createdAtStr string
+		if err := rows.Scan(&l.ID, &l.Endpoint, &l.Question, &l.TotalLatencyMs,
+			&l.RetrievalLatencyMs, &l.SynthesisLatencyMs, &l.FactsFound,
+			&l.FactsByVector, &l.FactsByText, &l.FactsByGraph,
+			&l.ChunksByVector, &l.ChunksByText, &l.CitationsCount,
+			&embedder, &errStr, &createdAtStr); err != nil {
+			return nil, err
+		}
+		l.EmbedderAvailable = embedder == 1
+		l.Error = errStr.String
+		if t := parseTime(createdAtStr); t != nil {
+			l.CreatedAt = *t
+		}
+		logs = append(logs, l)
+	}
+	return logs, rows.Err()
+}
+
+func (s *SQLiteStore) QueryLogStats(ctx context.Context, windowDays int) (*QueryLogStatsResult, error) {
+	var result QueryLogStatsResult
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COALESCE(SUM(CASE WHEN endpoint = 'query' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN endpoint = 'context' THEN 1 ELSE 0 END), 0),
+			COALESCE(AVG(CASE WHEN endpoint = 'query' THEN total_latency_ms END), 0),
+			COALESCE(AVG(CASE WHEN endpoint = 'context' THEN total_latency_ms END), 0),
+			COALESCE(SUM(CASE WHEN error IS NOT NULL AND error != '' THEN 1 ELSE 0 END), 0),
+			COALESCE(AVG(embedder_available) * 100, 0)
+		FROM query_log
+		WHERE created_at > datetime('now', '-' || ? || ' days')`,
+		windowDays,
+	).Scan(&result.TotalQueries, &result.TotalContext,
+		&result.AvgQueryLatency, &result.AvgContextLatency,
+		&result.ErrorCount, &result.EmbedderAvailPct)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 func (s *SQLiteStore) Stats(ctx context.Context) (*DBStats, error) {

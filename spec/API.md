@@ -448,6 +448,21 @@ imprint eval --golden=testdata/golden/
 # Evaluate and output JSON report
 imprint eval --golden=testdata/golden/ --format=json
 
+# Build context snapshot (no LLM, for system prompt injection)
+imprint context "current project topic"
+
+# Evaluate retrieval quality (seeds temp DB, runs 21 golden questions)
+imprint eval-retrieval
+
+# Evaluate retrieval without embedder (graceful degradation)
+imprint eval-retrieval --no-embedder
+
+# Evaluate retrieval with JSON output
+imprint eval-retrieval --format=json
+
+# Run one prompt optimization cycle (Karpathy loop)
+imprint optimize
+
 # Delete expired facts
 imprint gc
 

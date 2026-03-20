@@ -58,8 +58,29 @@ type retrievalResult struct {
 	graphFacts     []model.Fact
 }
 
-// Query answers a natural language question using hybrid retrieval.
-func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResult, error) {
+// RetrievalResult holds ranked facts with per-layer attribution,
+// suitable for eval without LLM synthesis.
+type RetrievalResult struct {
+	Ranked         []RankedFact
+	FactsByVector  int
+	FactsByText    int
+	FactsByGraph   int
+	ChunksByVector int
+	ChunksByText   int
+}
+
+// RankedFact is a fact with its merged RRF score and layer provenance.
+type RankedFact struct {
+	Fact       model.Fact
+	Score      float64
+	FromVector bool
+	FromText   bool
+	FromGraph  bool
+}
+
+// Retrieve runs the retrieval pipeline (embed, parallel search, RRF merge)
+// without LLM synthesis. Returns ranked facts with per-layer attribution.
+func (q *Querier) Retrieve(ctx context.Context, question string) (*RetrievalResult, error) {
 	var embedding []float32
 	if q.embedder != nil {
 		var err error
@@ -69,7 +90,60 @@ func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResul
 		}
 	}
 
+	r := q.retrieve(ctx, question, embedding)
+	ranked := q.mergeAndRank(r)
+
+	vectorIDs := map[string]bool{}
+	for i := range r.factsByVector {
+		vectorIDs[r.factsByVector[i].Fact.ID] = true
+	}
+	textIDs := map[string]bool{}
+	for i := range r.factsByText {
+		textIDs[r.factsByText[i].Fact.ID] = true
+	}
+	graphIDs := map[string]bool{}
+	for i := range r.graphFacts {
+		graphIDs[r.graphFacts[i].ID] = true
+	}
+
+	out := make([]RankedFact, len(ranked))
+	for i, rf := range ranked {
+		out[i] = RankedFact{
+			Fact:       rf.fact,
+			Score:      rf.score,
+			FromVector: vectorIDs[rf.fact.ID],
+			FromText:   textIDs[rf.fact.ID],
+			FromGraph:  graphIDs[rf.fact.ID],
+		}
+	}
+
+	return &RetrievalResult{
+		Ranked:         out,
+		FactsByVector:  len(r.factsByVector),
+		FactsByText:    len(r.factsByText),
+		FactsByGraph:   len(r.graphFacts),
+		ChunksByVector: len(r.chunksByVector),
+		ChunksByText:   len(r.chunksByText),
+	}, nil
+}
+
+// Query answers a natural language question using hybrid retrieval.
+func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResult, error) {
+	totalStart := time.Now()
+
+	var embedding []float32
+	embedderAvailable := q.embedder != nil
+	if q.embedder != nil {
+		var err error
+		embedding, err = q.embedder.Embed(ctx, question)
+		if err != nil {
+			q.logger.Warn("failed to embed question, falling back to text-only", "error", err)
+		}
+	}
+
+	retrievalStart := time.Now()
 	retrieved := q.retrieve(ctx, question, embedding)
+	retrievalMs := time.Since(retrievalStart).Milliseconds()
 
 	ranked := q.mergeAndRank(retrieved)
 
@@ -77,29 +151,90 @@ func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResul
 
 	prompt := q.buildPrompt(question, enriched)
 
+	synthesisStart := time.Now()
 	resp, err := q.sender.Send(ctx, provider.Request{
 		SystemPrompt: prompt.system,
 		UserPrompt:   prompt.user,
 		MaxTokens:    2048,
 	})
 	if err != nil {
+		totalMs := time.Since(totalStart).Milliseconds()
+		q.writeQueryLog(ctx, "query", question, totalMs, retrievalMs, 0,
+			len(ranked), retrieved, 0, embedderAvailable, err.Error())
 		return nil, fmt.Errorf("query LLM: %w", err)
 	}
 
 	result, err := parseResponse(resp.Content)
+	synthesisMs := time.Since(synthesisStart).Milliseconds()
 	if err != nil {
+		totalMs := time.Since(totalStart).Milliseconds()
+		q.writeQueryLog(ctx, "query", question, totalMs, retrievalMs, synthesisMs,
+			len(ranked), retrieved, 0, embedderAvailable, err.Error())
 		return nil, fmt.Errorf("parse query response: %w", err)
 	}
 
 	result.FactsConsulted = len(ranked)
 
+	q.persistCitations(ctx, result.Citations)
+
+	totalMs := time.Since(totalStart).Milliseconds()
+	q.writeQueryLog(ctx, "query", question, totalMs, retrievalMs, synthesisMs,
+		len(ranked), retrieved, len(result.Citations), embedderAvailable, "")
+
 	q.logger.Info("query complete",
 		"question_len", len(question),
 		"facts_consulted", result.FactsConsulted,
 		"citations", len(result.Citations),
+		"total_ms", totalMs,
+		"retrieval_ms", retrievalMs,
+		"synthesis_ms", synthesisMs,
 	)
 
 	return result, nil
+}
+
+func (q *Querier) writeQueryLog(ctx context.Context, endpoint, question string,
+	totalMs, retrievalMs, synthesisMs int64, factsFound int,
+	r *retrievalResult, citations int, embedderAvailable bool, errStr string) {
+	l := &db.QueryLog{
+		ID:                 db.NewID(),
+		Endpoint:           endpoint,
+		Question:           question,
+		TotalLatencyMs:     totalMs,
+		RetrievalLatencyMs: retrievalMs,
+		SynthesisLatencyMs: synthesisMs,
+		FactsFound:         factsFound,
+		CitationsCount:     citations,
+		EmbedderAvailable:  embedderAvailable,
+		Error:              errStr,
+		CreatedAt:          time.Now(),
+	}
+	if r != nil {
+		l.FactsByVector = len(r.factsByVector)
+		l.FactsByText = len(r.factsByText)
+		l.FactsByGraph = len(r.graphFacts)
+		l.ChunksByVector = len(r.chunksByVector)
+		l.ChunksByText = len(r.chunksByText)
+	}
+	if err := q.store.CreateQueryLog(ctx, l); err != nil {
+		q.logger.Warn("failed to write query log", "error", err)
+	}
+}
+
+func (q *Querier) persistCitations(ctx context.Context, citations []model.Citation) {
+	if len(citations) == 0 {
+		return
+	}
+	queryID := db.NewID()
+	for _, c := range citations {
+		if c.FactID == "" {
+			continue
+		}
+		if err := q.store.CreateFactCitation(ctx, c.FactID, queryID); err != nil {
+			q.logger.Warn("failed to persist fact citation",
+				"fact_id", c.FactID, "query_id", queryID, "error", err)
+		}
+	}
 }
 
 // retrieve runs all retrieval layers concurrently and collects results.

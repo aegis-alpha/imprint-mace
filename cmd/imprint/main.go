@@ -20,6 +20,7 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/api"
 	"github.com/aegis-alpha/imprint-mace/internal/config"
 	"github.com/aegis-alpha/imprint-mace/internal/consolidation"
+	"github.com/aegis-alpha/imprint-mace/internal/quality"
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	impeval "github.com/aegis-alpha/imprint-mace/internal/eval"
@@ -75,6 +76,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  context [HINT]            Build context snapshot for system prompt injection")
 		fmt.Fprintln(os.Stderr, "  eval --golden=PATH [--format=json|table] Evaluate extraction quality against golden set")
 		fmt.Fprintln(os.Stderr, "  eval generate [--output=PATH]           Generate built-in golden eval dataset (default: testdata/golden/)")
+		fmt.Fprintln(os.Stderr, "  eval-retrieval [--format=json|table] [--no-embedder] Evaluate retrieval quality (Recall@10, MRR)")
+		fmt.Fprintln(os.Stderr, "  optimize                  Run one prompt optimization cycle (Karpathy loop)")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
 		fmt.Fprintln(os.Stderr, "  version                   Print version and exit")
 		os.Exit(1)
@@ -190,6 +193,20 @@ func main() {
 			os.Exit(1)
 		}
 		runEval(logger, *cfgPath, goldenDir, format)
+	case "eval-retrieval":
+		format := "table"
+		noEmbedder := false
+		for _, a := range args[1:] {
+			switch {
+			case strings.HasPrefix(a, "--format="):
+				format = a[9:]
+			case a == "--no-embedder":
+				noEmbedder = true
+			}
+		}
+		runEvalRetrieval(logger, *cfgPath, format, noEmbedder)
+	case "optimize":
+		runOptimizeCmd(logger, *cfgPath)
 	case "gc":
 		runGC(logger, *cfgPath)
 	case "version":
@@ -235,7 +252,16 @@ func createEngine(logger *slog.Logger, cfg *config.Config, store db.Store) *impr
 	}
 
 	types := cfg.EffectiveTypes()
-	extractor, err := extraction.New(chain, cfg.Prompts.Extraction, types, logger)
+	promptPath := cfg.Prompts.Extraction
+	qcfg := cfg.EffectiveQualityConfig()
+	if qcfg.OptimizedPromptPath != "" {
+		if _, err := os.Stat(qcfg.OptimizedPromptPath); err == nil {
+			logger.Info("using optimized extraction prompt", "path", qcfg.OptimizedPromptPath)
+			promptPath = qcfg.OptimizedPromptPath
+		}
+	}
+
+	extractor, err := extraction.New(chain, promptPath, types, logger)
 	if err != nil {
 		logger.Error("failed to create extractor", "error", err)
 		os.Exit(1)
@@ -344,6 +370,73 @@ func runConsolidation(ctx context.Context, logger *slog.Logger, cfg *config.Conf
 	}
 }
 
+func runQualityCollection(ctx context.Context, logger *slog.Logger, store *db.SQLiteStore, qcfg config.QualityConfig) {
+	collector := quality.NewCollector(store.RawDB(), store, qcfg, logger)
+	n, err := collector.CollectAll(ctx)
+	if err != nil {
+		logger.Warn("quality signal collection failed", "error", err)
+		return
+	}
+	if n > 0 {
+		fmt.Printf("Quality signals collected: %d\n", n)
+	}
+}
+
+func runOptimization(ctx context.Context, logger *slog.Logger, cfg *config.Config, store *db.SQLiteStore) {
+	qcfg := cfg.EffectiveQualityConfig()
+
+	signals, err := store.ListQualitySignals(ctx, "", 50)
+	if err != nil || len(signals) == 0 {
+		return
+	}
+
+	extractionProviders := cfg.Providers.Extraction
+	chain, err := provider.NewChain(extractionProviders)
+	if err != nil {
+		logger.Warn("optimization: no provider chain", "error", err)
+		return
+	}
+
+	mutationPrompt, err := os.ReadFile(qcfg.MutationPromptPath)
+	if err != nil {
+		logger.Warn("optimization: no mutation prompt", "path", qcfg.MutationPromptPath, "error", err)
+		return
+	}
+
+	opt := quality.NewOptimizer(quality.OptimizerConfig{
+		Sender:         chain,
+		Store:          store,
+		QualityCfg:     qcfg,
+		PromptPath:     cfg.Prompts.Extraction,
+		OptimizedPath:  qcfg.OptimizedPromptPath,
+		MutationPrompt: string(mutationPrompt),
+		GoldenDir:      qcfg.GoldenDir,
+		Types:          cfg.EffectiveTypes(),
+		Logger:         logger,
+	})
+
+	if !opt.ShouldOptimize(signals) {
+		return
+	}
+
+	result := opt.Optimize(ctx)
+	if result.Skipped != "" {
+		logger.Info("optimization skipped", "reason", result.Skipped)
+		return
+	}
+	if result.Error != nil {
+		logger.Warn("optimization failed", "error", result.Error)
+		return
+	}
+	if result.Kept {
+		fmt.Printf("Optimization: prompt improved (%.4f -> %.4f), saved to %s\n",
+			result.BaselineScore, result.CandidateScore, qcfg.OptimizedPromptPath)
+	} else {
+		fmt.Printf("Optimization: candidate discarded (%.4f <= %.4f)\n",
+			result.CandidateScore, result.BaselineScore)
+	}
+}
+
 func runIngest(logger *slog.Logger, cfgPath string) {
 	cfg := loadConfig(logger, cfgPath)
 	store := openStore(logger, cfg)
@@ -404,6 +497,12 @@ func runIngestDir(logger *slog.Logger, cfgPath, dir string, consolidate bool) {
 	if consolidate || cfg.Watcher.ConsolidateAfterIngest {
 		runConsolidation(ctx, logger, cfg, store)
 	}
+
+	qcfg := cfg.EffectiveQualityConfig()
+	if qcfg.Enabled != nil && *qcfg.Enabled && result.FactsTotal >= qcfg.CollectionThreshold {
+		runQualityCollection(ctx, logger, store, qcfg)
+		runOptimization(ctx, logger, cfg, store)
+	}
 }
 
 func runWatch(logger *slog.Logger, cfgPath, dir string) {
@@ -419,6 +518,7 @@ func runWatch(logger *slog.Logger, cfgPath, dir string) {
 		debounce = 2 * time.Second
 	}
 
+	qcfg := cfg.EffectiveQualityConfig()
 	process := func(ctx context.Context, watchDir string) error {
 		result, err := adapter.ProcessDir(ctx, watchDir)
 		if err != nil {
@@ -428,6 +528,10 @@ func runWatch(logger *slog.Logger, cfgPath, dir string) {
 			fmt.Printf("Processed: %d files, %d facts\n", result.FilesProcessed, result.FactsTotal)
 			if cfg.Watcher.ConsolidateAfterIngest {
 				runConsolidation(ctx, logger, cfg, store)
+			}
+			if qcfg.Enabled != nil && *qcfg.Enabled && result.FactsTotal >= qcfg.CollectionThreshold {
+				runQualityCollection(ctx, logger, store, qcfg)
+				runOptimization(ctx, logger, cfg, store)
 			}
 		}
 		return nil
@@ -486,6 +590,64 @@ func runStatus(logger *slog.Logger, cfgPath string) {
 	fmt.Printf("Relationships:  %d\n", stats.Relationships)
 	fmt.Printf("Consolidations: %d\n", stats.Consolidations)
 	fmt.Printf("Ingested files: %d\n", stats.IngestedFiles)
+
+	printQualitySignals(ctx, store, cfg.EffectiveQualityConfig())
+	printQueryStats(ctx, store)
+}
+
+func printQualitySignals(ctx context.Context, store *db.SQLiteStore, qcfg config.QualityConfig) {
+	signals, err := store.ListQualitySignals(ctx, "", 0)
+	if err != nil || len(signals) == 0 {
+		return
+	}
+
+	type key struct{ signalType, category string }
+	seen := map[key]bool{}
+	var latest []db.QualitySignal
+	for _, s := range signals {
+		k := key{s.SignalType, s.Category}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		latest = append(latest, s)
+	}
+
+	temporalTypes := map[string]bool{"context": true, "event": true}
+
+	fmt.Printf("\nQuality Signals:\n")
+	fmt.Printf("  %-28s %-16s %8s\n", "Signal", "Category", "Value")
+	fmt.Printf("  %s\n", strings.Repeat("-", 56))
+	for _, s := range latest {
+		warning := ""
+		if s.SignalType == quality.SignalSupersedeRate &&
+			!temporalTypes[s.Category] &&
+			s.Value > qcfg.SupersedeRateWarning {
+			warning = "  !! high"
+		}
+		fmt.Printf("  %-28s %-16s %8.4f%s\n", s.SignalType, s.Category, s.Value, warning)
+	}
+}
+
+func printQueryStats(ctx context.Context, store *db.SQLiteStore) {
+	stats, err := store.QueryLogStats(ctx, 30)
+	if err != nil || (stats.TotalQueries == 0 && stats.TotalContext == 0) {
+		return
+	}
+
+	total := stats.TotalQueries + stats.TotalContext
+	errorRate := 0.0
+	if total > 0 {
+		errorRate = float64(stats.ErrorCount) / float64(total) * 100
+	}
+
+	fmt.Printf("\nQuery Stats (last 30 days):\n")
+	fmt.Printf("  Total queries:    %d\n", stats.TotalQueries)
+	fmt.Printf("  Total context:    %d\n", stats.TotalContext)
+	fmt.Printf("  Avg latency:      %.0fms (query), %.0fms (context)\n",
+		stats.AvgQueryLatency, stats.AvgContextLatency)
+	fmt.Printf("  Error rate:       %.1f%%\n", errorRate)
+	fmt.Printf("  Embedder avail:   %.1f%%\n", stats.EmbedderAvailPct)
 }
 
 func runEmbedBackfill(logger *slog.Logger, cfgPath, modelFilter string) {
@@ -659,6 +821,7 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		if debounce == 0 {
 			debounce = 2 * time.Second
 		}
+		serveQcfg := cfg.EffectiveQualityConfig()
 		process := func(ctx context.Context, dir string) error {
 			result, err := adapter.ProcessDir(ctx, dir)
 			if err != nil {
@@ -669,6 +832,10 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 					"files", result.FilesProcessed, "facts", result.FactsTotal)
 				if cfg.Watcher.ConsolidateAfterIngest {
 					runConsolidation(ctx, logger, cfg, store)
+				}
+				if serveQcfg.Enabled != nil && *serveQcfg.Enabled && result.FactsTotal >= serveQcfg.CollectionThreshold {
+					runQualityCollection(ctx, logger, store, serveQcfg)
+					runOptimization(ctx, logger, cfg, store)
 				}
 			}
 			return nil
@@ -985,7 +1152,16 @@ func runEval(logger *slog.Logger, cfgPath, goldenDir, format string) {
 	}
 
 	types := cfg.EffectiveTypes()
-	extractor, err := extraction.New(chain, cfg.Prompts.Extraction, types, logger)
+	evalPromptPath := cfg.Prompts.Extraction
+	evalQcfg := cfg.EffectiveQualityConfig()
+	if evalQcfg.OptimizedPromptPath != "" {
+		if _, err := os.Stat(evalQcfg.OptimizedPromptPath); err == nil {
+			logger.Info("eval using optimized extraction prompt", "path", evalQcfg.OptimizedPromptPath)
+			evalPromptPath = evalQcfg.OptimizedPromptPath
+		}
+	}
+
+	extractor, err := extraction.New(chain, evalPromptPath, types, logger)
 	if err != nil {
 		logger.Error("failed to create extractor", "error", err)
 		os.Exit(1)
@@ -1014,6 +1190,148 @@ func runEval(logger *slog.Logger, cfgPath, goldenDir, format string) {
 		}
 	default:
 		impeval.WriteTable(os.Stdout, report)
+	}
+}
+
+func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bool) {
+	cfg := loadConfig(logger, cfgPath)
+
+	tmpDir, err := os.MkdirTemp("", "imprint-eval-retrieval-*")
+	if err != nil {
+		logger.Error("failed to create temp dir", "error", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpDBPath := filepath.Join(tmpDir, "eval.db")
+	store, err := db.Open(tmpDBPath)
+	if err != nil {
+		logger.Error("failed to open temp database", "error", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	seed := impeval.BuiltinRetrievalSeed()
+	nf, ne, nr, err := impeval.SeedDB(ctx, store, seed)
+	if err != nil {
+		logger.Error("failed to seed eval database", "error", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "Seeded eval DB: %d facts, %d entities, %d relationships\n", nf, ne, nr)
+
+	var embedder provider.Embedder
+	if !noEmbedder {
+		embChain, embErr := provider.NewEmbedderChain(cfg.Providers.Embedding)
+		if embErr == nil && embChain != nil {
+			embedder = embChain
+
+			dims := cfg.EffectiveEmbeddingDims()
+			if err := store.EnsureVecTable(ctx, dims); err != nil {
+				logger.Error("failed to initialize vector table", "error", err)
+				os.Exit(1)
+			}
+
+			fmt.Fprintf(os.Stderr, "Embedding %d seed facts...\n", nf)
+			for _, f := range seed.Facts {
+				vec, err := embChain.Embed(ctx, f.Content)
+				if err != nil {
+					logger.Warn("embed seed fact failed", "fact_id", f.ID, "error", err)
+					continue
+				}
+				if err := store.UpdateFactEmbedding(ctx, f.ID, vec, embChain.ModelName()); err != nil {
+					logger.Warn("store seed embedding failed", "fact_id", f.ID, "error", err)
+				}
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "No embedding provider configured, running text+graph only")
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Embedder disabled (--no-embedder)")
+	}
+
+	queryProviders := cfg.Providers.Query
+	if len(queryProviders) == 0 {
+		queryProviders = cfg.Providers.Extraction
+	}
+	chain, err := provider.NewChain(queryProviders)
+	if err != nil {
+		logger.Error("failed to create query provider chain", "error", err)
+		os.Exit(1)
+	}
+
+	q := query.New(store, embedder, chain, "", logger)
+
+	examples := impeval.BuiltinRetrievalExamples()
+	fmt.Fprintf(os.Stderr, "Running retrieval eval: %d questions\n", len(examples))
+
+	report, err := impeval.RunRetrieval(ctx, q, examples)
+	if err != nil {
+		logger.Error("retrieval eval failed", "error", err)
+		os.Exit(1)
+	}
+
+	switch format {
+	case "json":
+		if err := impeval.WriteRetrievalJSON(os.Stdout, report); err != nil {
+			logger.Error("failed to write JSON report", "error", err)
+			os.Exit(1)
+		}
+	default:
+		impeval.WriteRetrievalTable(os.Stdout, report)
+	}
+}
+
+func runOptimizeCmd(logger *slog.Logger, cfgPath string) {
+	cfg := loadConfig(logger, cfgPath)
+	store := openStore(logger, cfg)
+	defer store.Close()
+
+	ctx := context.Background()
+	qcfg := cfg.EffectiveQualityConfig()
+
+	chain, err := provider.NewChain(cfg.Providers.Extraction)
+	if err != nil {
+		logger.Error("failed to create provider chain", "error", err)
+		os.Exit(1)
+	}
+
+	mutationPrompt, err := os.ReadFile(qcfg.MutationPromptPath)
+	if err != nil {
+		logger.Error("failed to read mutation prompt", "path", qcfg.MutationPromptPath, "error", err)
+		os.Exit(1)
+	}
+
+	opt := quality.NewOptimizer(quality.OptimizerConfig{
+		Sender:         chain,
+		Store:          store,
+		QualityCfg:     qcfg,
+		PromptPath:     cfg.Prompts.Extraction,
+		OptimizedPath:  qcfg.OptimizedPromptPath,
+		MutationPrompt: string(mutationPrompt),
+		GoldenDir:      qcfg.GoldenDir,
+		Types:          cfg.EffectiveTypes(),
+		Logger:         logger,
+	})
+
+	fmt.Println("Running optimization cycle...")
+	result := opt.Optimize(ctx)
+
+	if result.Skipped != "" {
+		fmt.Printf("Skipped: %s\n", result.Skipped)
+		return
+	}
+	if result.Error != nil {
+		fmt.Fprintf(os.Stderr, "Optimization failed: %v\n", result.Error)
+		os.Exit(1)
+	}
+	if result.Kept {
+		fmt.Printf("Prompt improved: %.4f -> %.4f\nSaved to: %s\n",
+			result.BaselineScore, result.CandidateScore, qcfg.OptimizedPromptPath)
+	} else {
+		fmt.Printf("Candidate discarded: %.4f <= baseline %.4f\n",
+			result.CandidateScore, result.BaselineScore)
 	}
 }
 

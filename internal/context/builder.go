@@ -42,11 +42,14 @@ func New(store db.Store, embedder provider.Embedder, transcriptDir string, cfg B
 // If hint is empty, only preferences and recent facts are returned.
 // Returns empty string when no facts are found (not an error).
 func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
+	totalStart := time.Now()
 	seen := map[string]bool{}
 	var relevant []model.Fact
 	var preferences []model.Fact
 	var recent []model.Fact
+	var factsByVector, factsByText int
 
+	embedderAvailable := b.embedder != nil
 	if b.embedder != nil && hint != "" {
 		embedding, err := b.embedder.Embed(ctx, hint)
 		if err != nil {
@@ -56,6 +59,7 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 			if err != nil {
 				b.logger.Warn("vector search failed", "error", err)
 			} else {
+				factsByVector = len(results)
 				for i := range results {
 					if !seen[results[i].Fact.ID] {
 						seen[results[i].Fact.ID] = true
@@ -73,6 +77,7 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 			if err != nil {
 				b.logger.Warn("text search failed", "error", err)
 			} else {
+				factsByText = len(results)
 				for i := range results {
 					if !seen[results[i].Fact.ID] {
 						seen[results[i].Fact.ID] = true
@@ -100,7 +105,32 @@ func (b *Builder) Build(ctx context.Context, hint string) (string, error) {
 		recent = recentFacts
 	}
 
-	return formatContext(relevant, preferences, recent, seen), nil
+	result := formatContext(relevant, preferences, recent, seen)
+	totalFacts := len(relevant) + len(preferences) + len(recent)
+
+	totalMs := time.Since(totalStart).Milliseconds()
+	b.writeQueryLog(ctx, hint, totalMs, totalFacts, factsByVector, factsByText, embedderAvailable)
+
+	return result, nil
+}
+
+func (b *Builder) writeQueryLog(ctx context.Context, hint string,
+	totalMs int64, factsFound, factsByVector, factsByText int, embedderAvailable bool) {
+	l := &db.QueryLog{
+		ID:                 db.NewID(),
+		Endpoint:           "context",
+		Question:           hint,
+		TotalLatencyMs:     totalMs,
+		RetrievalLatencyMs: totalMs,
+		FactsFound:         factsFound,
+		FactsByVector:      factsByVector,
+		FactsByText:        factsByText,
+		EmbedderAvailable:  embedderAvailable,
+		CreatedAt:          time.Now(),
+	}
+	if err := b.store.CreateQueryLog(ctx, l); err != nil {
+		b.logger.Warn("failed to write query log", "error", err)
+	}
 }
 
 func formatContext(relevant, preferences, recent []model.Fact, seen map[string]bool) string {

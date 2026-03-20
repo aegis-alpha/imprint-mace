@@ -152,6 +152,27 @@ echo "Alice decided to use Go for Acme." | ./imprint ingest
 
 # Generate embeddings for facts without them
 ./imprint embed-backfill
+
+# Build context snapshot (for system prompt injection, no LLM)
+./imprint context "current project topic"
+
+# Export knowledge base
+./imprint export --format=json --output=backup.json
+
+# Evaluate extraction quality against golden set
+./imprint eval --golden=testdata/golden/
+
+# Evaluate retrieval quality (Recall@10, MRR, per-layer stats)
+./imprint eval-retrieval
+
+# Evaluate retrieval without embedder (graceful degradation test)
+./imprint eval-retrieval --no-embedder
+
+# Run one prompt optimization cycle (Karpathy loop)
+./imprint optimize
+
+# Delete expired facts
+./imprint gc
 ```
 
 Use `--config` to specify a config file (default: `config.toml`, env: `IMPRINT_CONFIG`):
@@ -363,7 +384,9 @@ The entire cycle is autonomous. No human intervention needed, though all proposa
 - **Consolidation:** background grouping of related facts, connection discovery, higher-order insights
 - **Transcript-first storage:** files on disk are the source of truth, DB is a derived index with back-references to file + line range
 - **Self-editing memory:** agents can update fact metadata or supersede facts with corrected content via MCP tools or HTTP API
-- **11 CLI subcommands**, 238 tests, Docker deployment with Watchtower auto-update
+- **Eval harness:** extraction eval (CaRB-style P/R/F1, NRR, ECE, composite score) + retrieval eval (Recall@10, MRR, per-layer contribution, graceful degradation delta). Built-in golden datasets for both.
+- **Self-tuning quality:** quality signal collection (supersede rate, confidence drift, entity collision rate), Karpathy loop for automatic prompt optimization, query_log instrumentation
+- **15 CLI subcommands**, 345 tests, Docker deployment with Watchtower auto-update
 
 ## Benchmarks
 

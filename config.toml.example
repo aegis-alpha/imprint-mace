@@ -351,3 +351,25 @@ example = ""
 name = "precedes"
 description = "Fact A happened before fact B"
 example = ""
+
+# --- Quality signal collection (BVP-279) ---
+# Automatic quality monitoring. Collects signals from production data
+# (supersede rates, citation rates, confidence calibration, etc.)
+# and uses them to detect extraction quality issues.
+[quality]
+# Enable/disable quality signal collection (default: true)
+enabled = true
+# Minimum new facts before running signal collection (default: 50)
+collection_threshold = 50
+# Warn if non-temporal fact type supersede rate exceeds this (default: 0.30)
+supersede_rate_warning = 0.30
+# Sliding window for all signal queries in days (default: 30)
+window_days = 30
+# Exponential decay half-life within the window in days (default: 14)
+decay_half_life_days = 14
+# Path for optimized prompt (written by Karpathy loop, default: prompts/extraction-prompt-optimized.md)
+# optimized_prompt_path = "prompts/extraction-prompt-optimized.md"
+# Path to mutation system prompt (default: prompts/mutation-prompt.md)
+# mutation_prompt_path = "prompts/mutation-prompt.md"
+# Path to golden eval dataset (default: built-in dataset)
+# golden_dir = "testdata/golden"

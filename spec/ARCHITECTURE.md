@@ -420,3 +420,59 @@ Paired files in a directory: `001-foo.txt` (input) + `001-foo.json` (expected ou
 ### 10.4 Output
 
 Table (default) or JSON (`--format=json`). The composite score is a single number (0-1) suitable as an optimization target for automated prompt tuning.
+
+### 10.5 Retrieval Eval
+
+`imprint eval-retrieval` evaluates the retrieval pipeline (without LLM synthesis). It seeds a temporary database with a built-in golden dataset (32 facts, 33 entities, 17 relationships from a consistent test universe), then runs 21 golden questions across 5 categories.
+
+**Categories:**
+
+| Category | What it tests | Count |
+|----------|--------------|-------|
+| direct_lookup | Single fact, keyword match | 9 |
+| graph_traversal | Following entity relationships | 5 |
+| temporal | Time-sensitive questions | 2 |
+| multi_hop | Combining facts from multiple sources | 3 |
+| noise | Questions with no answer in KB | 2 |
+
+**Metrics:**
+
+| Metric | Description |
+|--------|-------------|
+| Recall@10 | Fraction of expected facts in top 10 retrieved |
+| MRR | Mean Reciprocal Rank: 1/rank of first relevant fact |
+| Per-layer contribution | Which layers (vector, FTS5, graph) found expected facts |
+| Noise rejection | Fraction of noise questions returning zero results |
+
+**Graceful degradation:** Run with `--no-embedder` to measure quality without vector search. The delta between full and text+graph-only modes quantifies embedder importance.
+
+The `Querier.Retrieve()` method runs the full retrieval pipeline (embed, parallel search, RRF merge) and returns ranked facts with per-fact layer provenance (`FromVector`, `FromText`, `FromGraph`) without calling the LLM for synthesis.
+
+---
+
+## 11. Quality Signals and Prompt Optimization
+
+### 11.1 Quality Signal Collection
+
+`internal/quality.Collector` computes quality metrics from production data (SQL queries over extraction_log, facts, entities). Signals are stored in the `quality_signals` table.
+
+| Signal | What it measures |
+|--------|-----------------|
+| supersede_rate | Fraction of facts superseded per fact type |
+| confidence_mean | Average extraction confidence per fact type |
+| entity_collision_rate | Fraction of entity creations that were dedup collisions |
+
+### 11.2 Karpathy Loop (Prompt Optimization)
+
+`internal/quality.LoopOptimizer` automatically improves the extraction prompt:
+
+1. **Trigger:** quality signals exceed thresholds after ingest
+2. **Mutate:** send current prompt + signal summary to LLM via mutation prompt
+3. **Eval:** run candidate prompt against the extraction golden set
+4. **Gate:** if composite score improves, write to `prompts/extraction-prompt-optimized.md`; otherwise discard
+
+Rate-limited to 1 attempt per hour. Three consecutive failures pause for 24 hours. The original prompt is never modified.
+
+### 11.3 Query Log
+
+`query_log` table records per-query metrics: total/retrieval/synthesis latency, facts found per layer (vector, text, graph), citations count, embedder availability. Aggregated in `GET /status` and `imprint status`.

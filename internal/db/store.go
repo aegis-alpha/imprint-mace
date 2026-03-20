@@ -60,6 +60,19 @@ type Store interface {
 	// Extraction log (D19)
 	CreateExtractionLog(ctx context.Context, l *ExtractionLog) error
 	ListExtractionLogs(ctx context.Context, limit int) ([]ExtractionLog, error)
+	UpdateExtractionLogCollisions(ctx context.Context, logID string, collisions, creations int) error
+
+	// Quality signals (BVP-279)
+	CreateQualitySignal(ctx context.Context, s *QualitySignal) error
+	ListQualitySignals(ctx context.Context, signalType string, limit int) ([]QualitySignal, error)
+
+	// Query log (GOALS-AND-METRICS 4.3)
+	CreateQueryLog(ctx context.Context, l *QueryLog) error
+	ListQueryLogs(ctx context.Context, limit int) ([]QueryLog, error)
+	QueryLogStats(ctx context.Context, windowDays int) (*QueryLogStatsResult, error)
+
+	// Fact citations (BVP-279, D-Q1)
+	CreateFactCitation(ctx context.Context, factID, queryID string) error
 
 	// Ingested files (batch adapter)
 	GetIngestedFile(ctx context.Context, path string) (*IngestedFile, error)
@@ -175,9 +188,20 @@ type ExtractionLog struct {
 	FactsCount         int
 	EntitiesCount      int
 	RelationshipsCount int
+	EntityCollisions   int
+	EntityCreations    int
 	ErrorType          string
 	ErrorMessage       string
 	CreatedAt          time.Time
+}
+
+type QualitySignal struct {
+	ID         string
+	SignalType string
+	Category   string
+	Value      float64
+	Details    string
+	CreatedAt  time.Time
 }
 
 type IngestedFile struct {
@@ -197,6 +221,34 @@ type TaxonomySignal struct {
 	Details      string // JSON
 	CreatedAt    time.Time
 	ResolvedBy   string
+}
+
+type QueryLog struct {
+	ID                 string
+	Endpoint           string
+	Question           string
+	TotalLatencyMs     int64
+	RetrievalLatencyMs int64
+	SynthesisLatencyMs int64
+	FactsFound         int
+	FactsByVector      int
+	FactsByText        int
+	FactsByGraph       int
+	ChunksByVector     int
+	ChunksByText       int
+	CitationsCount     int
+	EmbedderAvailable  bool
+	Error              string
+	CreatedAt          time.Time
+}
+
+type QueryLogStatsResult struct {
+	TotalQueries     int
+	TotalContext      int
+	AvgQueryLatency  float64
+	AvgContextLatency float64
+	ErrorCount       int
+	EmbedderAvailPct float64
 }
 
 type TaxonomyProposal struct {

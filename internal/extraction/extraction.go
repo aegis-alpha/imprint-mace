@@ -163,18 +163,19 @@ func (e *Extractor) Extract(ctx context.Context, text string, sourceFile string)
 		"entities", len(result.Entities),
 		"relationships", len(result.Relationships),
 	)
-	e.writeLog(ctx, resp.ProviderName, resp.Model, len(text), resp.TokensUsed,
+	logID := e.writeLog(ctx, resp.ProviderName, resp.Model, len(text), resp.TokensUsed,
 		duration.Milliseconds(), true, len(result.Facts), len(result.Entities),
 		len(result.Relationships), "", "")
+	result.ExtractionLogID = logID
 
 	return result, nil
 }
 
 func (e *Extractor) writeLog(ctx context.Context, providerName, modelName string,
 	inputLen, tokens int, durationMs int64, success bool,
-	facts, entities, rels int, errType, errMsg string) {
+	facts, entities, rels int, errType, errMsg string) string {
 	if e.extLog == nil {
-		return
+		return ""
 	}
 	l := &db.ExtractionLog{
 		ID:                 db.NewID(),
@@ -193,7 +194,9 @@ func (e *Extractor) writeLog(ctx context.Context, providerName, modelName string
 	}
 	if err := e.extLog.CreateExtractionLog(ctx, l); err != nil {
 		e.logger.Error("failed to write extraction log", "error", err)
+		return ""
 	}
+	return l.ID
 }
 
 // hydrate converts raw LLM output into fully populated model types

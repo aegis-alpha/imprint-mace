@@ -24,6 +24,7 @@ vendor/
 
 # Internal files (not part of open-source product)
 PROJECT.md
+GOALS-AND-METRICS.md
 BREAKING-CHANGES.md
 session-registry.md
 naming-conventions.md

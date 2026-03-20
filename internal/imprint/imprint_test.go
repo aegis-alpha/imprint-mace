@@ -49,6 +49,7 @@ func testEngine(t *testing.T, sender *mockSender) (*Engine, db.Store) {
 	if err != nil {
 		t.Fatalf("create extractor: %v", err)
 	}
+	ext.SetExtractionLogger(store)
 
 	eng := New(ext, store, nil, 0, 0, slog.Default())
 	return eng, store
@@ -446,5 +447,105 @@ func TestIngest_DedupThresholdZero_Disabled(t *testing.T) {
 	facts, _ := store.ListFacts(ctx, db.FactFilter{})
 	if len(facts) != 2 {
 		t.Errorf("expected 2 facts (dedup disabled with threshold=0), got %d", len(facts))
+	}
+}
+
+func TestIngest_EntityCollisionCounters(t *testing.T) {
+	aliceJSON := `{
+  "facts": [],
+  "entities": [{"name": "Alice", "entity_type": "person", "aliases": []}],
+  "relationships": []
+}`
+	aliceAcmeJSON := `{
+  "facts": [],
+  "entities": [
+    {"name": "Alice", "entity_type": "person", "aliases": []},
+    {"name": "Acme", "entity_type": "project", "aliases": []}
+  ],
+  "relationships": []
+}`
+
+	sender := &mockSender{}
+	eng, _ := testEngine(t, sender)
+	ctx := context.Background()
+
+	sender.response = &provider.Response{
+		Content: aliceJSON, ProviderName: "mock", Model: "test", TokensUsed: 50,
+	}
+	r1, err := eng.Ingest(ctx, "Alice.", "test.md")
+	if err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	if r1.EntityCollisions != 0 {
+		t.Errorf("first ingest: expected 0 collisions, got %d", r1.EntityCollisions)
+	}
+	if r1.EntityCreations != 1 {
+		t.Errorf("first ingest: expected 1 creation, got %d", r1.EntityCreations)
+	}
+
+	sender.response = &provider.Response{
+		Content: aliceAcmeJSON, ProviderName: "mock", Model: "test", TokensUsed: 50,
+	}
+	r2, err := eng.Ingest(ctx, "Alice works on Acme.", "test2.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if r2.EntityCollisions != 1 {
+		t.Errorf("second ingest: expected 1 collision (Alice reused), got %d", r2.EntityCollisions)
+	}
+	if r2.EntityCreations != 1 {
+		t.Errorf("second ingest: expected 1 creation (Acme new), got %d", r2.EntityCreations)
+	}
+}
+
+func TestIngest_CollisionStatsInExtractionLog(t *testing.T) {
+	aliceJSON := `{
+  "facts": [],
+  "entities": [{"name": "Alice", "entity_type": "person", "aliases": []}],
+  "relationships": []
+}`
+	aliceAgainJSON := `{
+  "facts": [],
+  "entities": [
+    {"name": "Alice", "entity_type": "person", "aliases": []},
+    {"name": "Acme", "entity_type": "project", "aliases": []}
+  ],
+  "relationships": []
+}`
+
+	sender := &mockSender{}
+	eng, store := testEngine(t, sender)
+	ctx := context.Background()
+
+	sender.response = &provider.Response{
+		Content: aliceJSON, ProviderName: "mock", Model: "test", TokensUsed: 50,
+	}
+	_, err := eng.Ingest(ctx, "Alice.", "test.md")
+	if err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+
+	sender.response = &provider.Response{
+		Content: aliceAgainJSON, ProviderName: "mock", Model: "test", TokensUsed: 50,
+	}
+	_, err = eng.Ingest(ctx, "Alice works on Acme.", "test2.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+
+	logs, err := store.ListExtractionLogs(ctx, 10)
+	if err != nil {
+		t.Fatalf("list logs: %v", err)
+	}
+	if len(logs) < 2 {
+		t.Fatalf("expected at least 2 log entries, got %d", len(logs))
+	}
+
+	latest := logs[0]
+	if latest.EntityCollisions != 1 {
+		t.Errorf("extraction_log: expected entity_collisions=1, got %d", latest.EntityCollisions)
+	}
+	if latest.EntityCreations != 1 {
+		t.Errorf("extraction_log: expected entity_creations=1, got %d", latest.EntityCreations)
 	}
 }

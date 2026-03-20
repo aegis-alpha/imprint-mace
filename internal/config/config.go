@@ -20,6 +20,7 @@ type Config struct {
 	Types         TypesConfig         `toml:"types"`
 	Prompts       PromptPaths         `toml:"prompts"`
 	Context       ContextConfig       `toml:"context"`
+	Quality       QualityConfig       `toml:"quality"`
 }
 
 type APIConfig struct {
@@ -150,6 +151,44 @@ func (c *Config) EffectiveContextConfig() ContextConfig {
 		MaxFacts:           maxFacts,
 		IncludePreferences: &inclPrefs,
 	}
+}
+
+type QualityConfig struct {
+	Enabled              *bool   `toml:"enabled"`
+	CollectionThreshold  int     `toml:"collection_threshold"`
+	SupersedeRateWarning float64 `toml:"supersede_rate_warning"`
+	WindowDays           int     `toml:"window_days"`
+	DecayHalfLifeDays    int     `toml:"decay_half_life_days"`
+	OptimizedPromptPath  string  `toml:"optimized_prompt_path"`
+	MutationPromptPath   string  `toml:"mutation_prompt_path"`
+	GoldenDir            string  `toml:"golden_dir"`
+}
+
+func (c *Config) EffectiveQualityConfig() QualityConfig {
+	q := c.Quality
+	if q.Enabled == nil {
+		enabled := true
+		q.Enabled = &enabled
+	}
+	if q.CollectionThreshold == 0 {
+		q.CollectionThreshold = 50
+	}
+	if q.SupersedeRateWarning == 0 {
+		q.SupersedeRateWarning = 0.30
+	}
+	if q.WindowDays == 0 {
+		q.WindowDays = 30
+	}
+	if q.DecayHalfLifeDays == 0 {
+		q.DecayHalfLifeDays = 14
+	}
+	if q.OptimizedPromptPath == "" {
+		q.OptimizedPromptPath = "prompts/extraction-prompt-optimized.md"
+	}
+	if q.MutationPromptPath == "" {
+		q.MutationPromptPath = "prompts/mutation-prompt.md"
+	}
+	return q
 }
 
 func DefaultTypes() TypesConfig {
