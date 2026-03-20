@@ -206,7 +206,8 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 			opsMap[ops[i].ProviderName] = &ops[i]
 		}
 
-		for _, ph := range healthEntries {
+		for i := range healthEntries {
+			ph := &healthEntries[i]
 			phr := providerHealthResponse{
 				ProviderName:    ph.ProviderName,
 				TaskType:        ph.TaskType,

@@ -1398,7 +1398,7 @@ func persistExtractionEval(ctx context.Context, logger *slog.Logger, cfg *config
 		return
 	}
 
-	promptData, _ := os.ReadFile(promptPath)
+	promptData, _ := os.ReadFile(promptPath) //nolint:gosec // path from config, not user input
 	promptHash := fmt.Sprintf("%x", sha256.Sum256(promptData))
 
 	run := &db.EvalRun{

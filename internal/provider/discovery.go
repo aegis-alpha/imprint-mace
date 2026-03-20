@@ -92,10 +92,7 @@ func (l *OpenAIModelLister) ListModels(ctx context.Context) ([]ModelInfo, error)
 	if len(googleResp.Models) > 0 {
 		models := make([]ModelInfo, len(googleResp.Models))
 		for i, m := range googleResp.Models {
-			id := m.Name
-			if strings.HasPrefix(id, "models/") {
-				id = strings.TrimPrefix(id, "models/")
-			}
+			id := strings.TrimPrefix(m.Name, "models/")
 			models[i] = ModelInfo{ID: id, ContextWindow: m.InputTokenLimit}
 		}
 		return models, nil
