@@ -13,17 +13,20 @@ The agent sees relevant facts, preferences, and recent knowledge from Imprint be
 1. Copy the plugin directory to your OpenClaw instance:
 
 ```bash
-cp -r integrations/openclaw/plugin /path/to/imprint-context-plugin
+cp -r integrations/openclaw/plugin /home/ubuntu/imprint-context-plugin
 ```
 
-2. Add to `openclaw.json`:
+2. Add to `openclaw.json` -- two sections required:
 
 ```json
 {
   "plugins": {
+    "load": {
+      "paths": ["/home/ubuntu/imprint-context-plugin"]
+    },
     "entries": {
       "imprint-context": {
-        "path": "/path/to/imprint-context-plugin",
+        "enabled": true,
         "config": {
           "imprintUrl": "http://localhost:8890",
           "timeoutMs": 3000
@@ -33,6 +36,9 @@ cp -r integrations/openclaw/plugin /path/to/imprint-context-plugin
   }
 }
 ```
+
+- `plugins.load.paths` -- tells OpenClaw where to find the plugin (directory containing `openclaw.plugin.json`). Without this, OpenClaw won't discover the plugin.
+- `plugins.entries.imprint-context` -- enables the plugin and passes config (accessible via `api.pluginConfig`). Without this, the plugin loads but won't know the Imprint URL.
 
 3. Restart OpenClaw.
 
