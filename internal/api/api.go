@@ -410,7 +410,7 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.collector != nil && result.FactsCount > 0 {
-		go func() {
+		go func() { //nolint:gosec // G118: intentionally detached from request -- collection must complete even if client disconnects
 			if n, err := h.collector.CollectAll(context.Background()); err != nil {
 				h.logger.Warn("quality signal collection failed", "error", err)
 			} else if n > 0 {

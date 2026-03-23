@@ -1619,7 +1619,8 @@ func runEvalHistory(logger *slog.Logger, cfgPath, evalType string, limit int) {
 		"Date", "Type", "Commit", "Score", "Score2", "N", "Delta", "Baseline")
 	fmt.Println(strings.Repeat("-", 90))
 
-	for i, r := range runs {
+	for i := range runs {
+		r := &runs[i]
 		commit := r.GitCommit
 		if commit == "" {
 			commit = "-"
@@ -1752,8 +1753,11 @@ func runPostOptimizeEval(logger *slog.Logger, cfg *config.Config, store *db.SQLi
 			} else {
 				tmpDir, _ := os.MkdirTemp("", "imprint-golden-*")
 				defer os.RemoveAll(tmpDir)
-				impeval.Generate(tmpDir)
-				examples, err = impeval.LoadGoldenDir(tmpDir)
+				if _, genErr := impeval.Generate(tmpDir); genErr != nil {
+					err = genErr
+				} else {
+					examples, err = impeval.LoadGoldenDir(tmpDir)
+				}
 			}
 			if err != nil {
 				logger.Warn("post-optimize extraction eval skipped: golden load failed", "error", err)
