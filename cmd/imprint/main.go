@@ -974,6 +974,12 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 
 	handler := api.NewHandlerWithBuilder(eng, store, q, builder, version, logger)
 
+	serveQualityCfg := cfg.EffectiveQualityConfig()
+	if serveQualityCfg.Enabled == nil || *serveQualityCfg.Enabled {
+		collector := quality.NewCollector(store.RawDB(), store, serveQualityCfg, logger)
+		handler.SetCollector(collector)
+	}
+
 	ln, actualAddr, err := listenWithFallback(addr, 20, logger)
 	if err != nil {
 		logger.Error("no available port found", "base_addr", addr, "error", err)

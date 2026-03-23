@@ -27,17 +27,19 @@ import (
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
+	"github.com/aegis-alpha/imprint-mace/internal/quality"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
 )
 
 type Handler struct {
-	engine  *imprint.Engine
-	store   db.Store
-	querier *query.Querier
-	builder *impctx.Builder
-	logger  *slog.Logger
-	version string
-	mux     *http.ServeMux
+	engine    *imprint.Engine
+	store     db.Store
+	querier   *query.Querier
+	builder   *impctx.Builder
+	collector *quality.Collector
+	logger    *slog.Logger
+	version   string
+	mux       *http.ServeMux
 }
 
 func NewHandler(engine *imprint.Engine, store db.Store, querier *query.Querier, version string, logger *slog.Logger) *Handler {
@@ -69,6 +71,10 @@ func NewHandlerWithBuilder(engine *imprint.Engine, store db.Store, querier *quer
 	h.mux.HandleFunc("/admin/facts", h.methodDELETE(h.handleAdminDeleteFacts))
 	h.mux.HandleFunc("/admin/deduplicate-entities", h.methodPOST(h.handleAdminDedup))
 	return h
+}
+
+func (h *Handler) SetCollector(c *quality.Collector) {
+	h.collector = c
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +408,17 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "ingest failed")
 		return
 	}
+
+	if h.collector != nil && result.FactsCount > 0 {
+		go func() {
+			if n, err := h.collector.CollectAll(context.Background()); err != nil {
+				h.logger.Warn("quality signal collection failed", "error", err)
+			} else if n > 0 {
+				h.logger.Info("quality signals collected after ingest", "signals", n)
+			}
+		}()
+	}
+
 	writeJSON(w, http.StatusOK, result)
 }
 
