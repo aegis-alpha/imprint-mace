@@ -1352,7 +1352,7 @@ func runEval(logger *slog.Logger, cfgPath, goldenDir, format string, saveBaselin
 }
 
 func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, saveBaseline, check bool, threshold float64) {
-	cfg := loadConfig(logger, cfgPath)
+	cfg, _ := config.Load(cfgPath)
 
 	tmpDir, err := os.MkdirTemp("", "imprint-eval-retrieval-*")
 	if err != nil {
@@ -1380,7 +1380,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, s
 	fmt.Fprintf(os.Stderr, "Seeded eval DB: %d facts, %d entities, %d relationships\n", nf, ne, nr)
 
 	var embedder provider.Embedder
-	if !noEmbedder {
+	if !noEmbedder && cfg != nil {
 		embChain, embErr := provider.NewEmbedderChain(cfg.Providers.Embedding)
 		if embErr == nil && embChain != nil {
 			embedder = embChain
@@ -1406,21 +1406,23 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, s
 		} else {
 			fmt.Fprintln(os.Stderr, "No embedding provider configured, running text+graph only")
 		}
-	} else {
+	} else if noEmbedder {
 		fmt.Fprintln(os.Stderr, "Embedder disabled (--no-embedder)")
 	}
 
-	queryProviders := cfg.Providers.Query
-	if len(queryProviders) == 0 {
-		queryProviders = cfg.Providers.Extraction
-	}
-	chain, err := provider.NewChain(queryProviders)
-	if err != nil {
-		logger.Error("failed to create query provider chain", "error", err)
-		os.Exit(1)
+	var sender query.Sender
+	if cfg != nil {
+		queryProviders := cfg.Providers.Query
+		if len(queryProviders) == 0 {
+			queryProviders = cfg.Providers.Extraction
+		}
+		chain, chainErr := provider.NewChain(queryProviders)
+		if chainErr == nil {
+			sender = chain
+		}
 	}
 
-	q := query.New(tmpStore, embedder, chain, "", logger)
+	q := query.New(tmpStore, embedder, sender, "", logger)
 
 	examples := impeval.BuiltinRetrievalExamples()
 	fmt.Fprintf(os.Stderr, "Running retrieval eval: %d questions\n", len(examples))
@@ -1439,6 +1441,11 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, s
 		}
 	default:
 		impeval.WriteRetrievalTable(os.Stdout, report)
+	}
+
+	if cfg == nil {
+		fmt.Fprintln(os.Stderr, "No config -- eval results not persisted")
+		return
 	}
 
 	runID := persistRetrievalEval(ctx, logger, cfg, report)
