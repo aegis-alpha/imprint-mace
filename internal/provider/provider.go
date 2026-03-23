@@ -40,7 +40,7 @@ type Chain struct {
 }
 
 // NewChain creates a fallback chain from config.
-// Providers are sorted by priority (lower = tried first).
+// Providers are tried in config order (first config entry = tried first).
 // The provider type is determined by the "name" field in config:
 //   - "anthropic" -> Anthropic Messages API
 //   - "ollama"    -> Ollama native API (no API key needed)

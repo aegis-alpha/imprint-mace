@@ -85,6 +85,11 @@ const handler = async (event: any) => {
     const text = await res.text();
     if (text && text.trim().length > 0) {
       event.messages.push(`[Imprint context]\n${text.trim()}`);
+      console.log(
+        `[imprint-query] injected ${text.trim().length} chars of context`,
+      );
+    } else {
+      console.log("[imprint-query] /context returned empty");
     }
   } catch (err: any) {
     if (err?.name === "AbortError") {

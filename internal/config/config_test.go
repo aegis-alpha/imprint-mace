@@ -439,6 +439,47 @@ func TestEffectiveOpenClawMode(t *testing.T) {
 	}
 }
 
+func TestEffectiveHealthConfig_Defaults(t *testing.T) {
+	cfg := &Config{}
+	h := cfg.EffectiveHealthConfig()
+	if h.CatalogRefreshDays != 3 {
+		t.Errorf("expected CatalogRefreshDays 3, got %d", h.CatalogRefreshDays)
+	}
+	if h.MaxRetries != 5 {
+		t.Errorf("expected MaxRetries 5, got %d", h.MaxRetries)
+	}
+	if h.RetryIntervalHours != 1 {
+		t.Errorf("expected RetryIntervalHours 1, got %d", h.RetryIntervalHours)
+	}
+	if h.QueueTTLHours != 24 {
+		t.Errorf("expected QueueTTLHours 24, got %d", h.QueueTTLHours)
+	}
+}
+
+func TestEffectiveHealthConfig_Overrides(t *testing.T) {
+	cfg := &Config{
+		Health: HealthConfig{
+			CatalogRefreshDays: 7,
+			MaxRetries:         10,
+			RetryIntervalHours: 2,
+			QueueTTLHours:      48,
+		},
+	}
+	h := cfg.EffectiveHealthConfig()
+	if h.CatalogRefreshDays != 7 {
+		t.Errorf("expected CatalogRefreshDays 7, got %d", h.CatalogRefreshDays)
+	}
+	if h.MaxRetries != 10 {
+		t.Errorf("expected MaxRetries 10, got %d", h.MaxRetries)
+	}
+	if h.RetryIntervalHours != 2 {
+		t.Errorf("expected RetryIntervalHours 2, got %d", h.RetryIntervalHours)
+	}
+	if h.QueueTTLHours != 48 {
+		t.Errorf("expected QueueTTLHours 48, got %d", h.QueueTTLHours)
+	}
+}
+
 // --- helpers ---
 
 func loadFromString(t *testing.T, content string) *Config {

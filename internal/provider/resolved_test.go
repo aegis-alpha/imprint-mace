@@ -29,7 +29,7 @@ func newTestStore(t *testing.T) db.Store {
 	return store
 }
 
-func TestResolvedProvider_OverridesModel(t *testing.T) {
+func TestResolvedProvider_ActiveModelFromStore(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
@@ -45,11 +45,9 @@ func TestResolvedProvider_OverridesModel(t *testing.T) {
 		t.Fatalf("setup health: %v", err)
 	}
 
-	var capturedModel string
 	inner := &mockProvider{
 		name: "openai",
 		sendFn: func(ctx context.Context, req Request) (*Response, error) {
-			capturedModel = req.UserPrompt
 			return &Response{Content: "ok", ProviderName: "openai", Model: "gpt-5-mini"}, nil
 		},
 	}
@@ -63,7 +61,6 @@ func TestResolvedProvider_OverridesModel(t *testing.T) {
 	if rp.ActiveModel() != "gpt-5-mini" {
 		t.Errorf("expected active model gpt-5-mini, got %s", rp.ActiveModel())
 	}
-	_ = capturedModel
 }
 
 func TestResolvedProvider_SkipsAuthError(t *testing.T) {
@@ -280,6 +277,184 @@ func TestResolvedProvider_AuthErrorNeverRetries(t *testing.T) {
 	}
 	if ops.Status != "auth_error" {
 		t.Errorf("expected status auth_error, got %s", ops.Status)
+	}
+}
+
+func TestResolvedProvider_SkipsExhausted(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if err := store.UpsertProviderOps(ctx, &db.ProviderOps{
+		ProviderName: "openai",
+		Status:       "exhausted",
+		RetryCount:   5,
+		MaxRetries:   5,
+		LastError:    "status 503: service unavailable",
+		ErrorType:    "http_503",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("setup ops: %v", err)
+	}
+
+	called := false
+	inner := &mockProvider{
+		name: "openai",
+		sendFn: func(ctx context.Context, req Request) (*Response, error) {
+			called = true
+			return &Response{Content: "ok"}, nil
+		},
+	}
+
+	rp := NewResolvedProvider(inner, store, "openai", "extraction")
+	_, err := rp.Send(ctx, Request{UserPrompt: "hello"})
+	if err == nil {
+		t.Fatal("expected error for exhausted status")
+	}
+	if called {
+		t.Error("inner provider should not have been called when exhausted")
+	}
+}
+
+type mockEmbedder struct {
+	name    string
+	embedFn func(ctx context.Context, text string) ([]float32, error)
+}
+
+func (m *mockEmbedder) ModelName() string { return m.name }
+func (m *mockEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	return m.embedFn(ctx, text)
+}
+
+func TestResolvedEmbedder_SkipsAuthError(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if err := store.UpsertProviderOps(ctx, &db.ProviderOps{
+		ProviderName: "voyage",
+		Status:       "auth_error",
+		LastError:    "invalid key",
+		MaxRetries:   5,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("setup ops: %v", err)
+	}
+
+	called := false
+	inner := &mockEmbedder{
+		name: "voyage",
+		embedFn: func(ctx context.Context, text string) ([]float32, error) {
+			called = true
+			return []float32{0.1, 0.2}, nil
+		},
+	}
+
+	re := NewResolvedEmbedder(inner, store, "voyage")
+	_, err := re.Embed(ctx, "hello")
+	if err == nil {
+		t.Fatal("expected error for auth_error status")
+	}
+	if called {
+		t.Error("inner embedder should not have been called")
+	}
+}
+
+func TestResolvedEmbedder_SkipsExhausted(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	if err := store.UpsertProviderOps(ctx, &db.ProviderOps{
+		ProviderName: "voyage",
+		Status:       "exhausted",
+		RetryCount:   5,
+		MaxRetries:   5,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("setup ops: %v", err)
+	}
+
+	called := false
+	inner := &mockEmbedder{
+		name: "voyage",
+		embedFn: func(ctx context.Context, text string) ([]float32, error) {
+			called = true
+			return []float32{0.1, 0.2}, nil
+		},
+	}
+
+	re := NewResolvedEmbedder(inner, store, "voyage")
+	_, err := re.Embed(ctx, "hello")
+	if err == nil {
+		t.Fatal("expected error for exhausted status")
+	}
+	if called {
+		t.Error("inner embedder should not have been called when exhausted")
+	}
+}
+
+func TestResolvedEmbedder_ResetsOnSuccess(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	inner := &mockEmbedder{
+		name: "voyage",
+		embedFn: func(ctx context.Context, text string) ([]float32, error) {
+			return []float32{0.1, 0.2, 0.3}, nil
+		},
+	}
+
+	re := NewResolvedEmbedder(inner, store, "voyage")
+	vec, err := re.Embed(ctx, "hello")
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if len(vec) != 3 {
+		t.Errorf("expected 3-dim vector, got %d", len(vec))
+	}
+
+	ops, err := store.GetProviderOps(ctx, "voyage")
+	if err != nil {
+		t.Fatalf("get ops: %v", err)
+	}
+	if ops.Status != "ok" {
+		t.Errorf("expected status ok, got %s", ops.Status)
+	}
+	if ops.LastSuccess == nil {
+		t.Error("expected last_success to be set")
+	}
+}
+
+func TestResolvedEmbedder_RecordsError(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	inner := &mockEmbedder{
+		name: "voyage",
+		embedFn: func(ctx context.Context, text string) ([]float32, error) {
+			return nil, fmt.Errorf("status 503: service unavailable")
+		},
+	}
+
+	re := NewResolvedEmbedder(inner, store, "voyage")
+	_, err := re.Embed(ctx, "hello")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	ops, err := store.GetProviderOps(ctx, "voyage")
+	if err != nil {
+		t.Fatalf("get ops: %v", err)
+	}
+	if ops.Status != "transient_error" {
+		t.Errorf("expected status transient_error, got %s", ops.Status)
+	}
+	if ops.RetryCount != 1 {
+		t.Errorf("expected retry_count 1, got %d", ops.RetryCount)
 	}
 }
 

@@ -49,6 +49,11 @@ func (rp *ResolvedProvider) Send(ctx context.Context, req Request) (*Response, e
 			return nil, fmt.Errorf("provider %s: %w (auth_error: %s)", rp.providerName, ErrProviderUnavailable, ops.LastError)
 		}
 
+		if ops.Status == "exhausted" {
+			return nil, fmt.Errorf("provider %s: %w (exhausted after %d retries: %s)",
+				rp.providerName, ErrProviderUnavailable, ops.RetryCount, ops.LastError)
+		}
+
 		if ops.Status == "transient_error" && ops.NextCheckAt != nil {
 			if time.Now().UTC().Before(*ops.NextCheckAt) {
 				return nil, fmt.Errorf("provider %s: %w (transient_error, retry after %s)",
@@ -178,6 +183,9 @@ func (re *ResolvedEmbedder) Embed(ctx context.Context, text string) ([]float32, 
 	if ops != nil {
 		if ops.Status == "auth_error" {
 			return nil, fmt.Errorf("embedder %s: %w (auth_error)", re.providerName, ErrProviderUnavailable)
+		}
+		if ops.Status == "exhausted" {
+			return nil, fmt.Errorf("embedder %s: %w (exhausted)", re.providerName, ErrProviderUnavailable)
 		}
 		if ops.Status == "transient_error" && ops.NextCheckAt != nil {
 			if time.Now().UTC().Before(*ops.NextCheckAt) {

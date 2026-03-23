@@ -84,3 +84,51 @@ func TestClassifyError_HTTP429(t *testing.T) {
 		t.Errorf("expected ErrorTransient for 429, got %v", got)
 	}
 }
+
+func TestErrorTypeFromClass_HTTPStatus(t *testing.T) {
+	err := fmt.Errorf("status 503: service unavailable")
+	if got := ErrorTypeFromClass(ErrorTransient, err); got != "http_503" {
+		t.Errorf("expected http_503, got %s", got)
+	}
+}
+
+func TestErrorTypeFromClass_ConnectionRefused(t *testing.T) {
+	err := fmt.Errorf("connection refused")
+	if got := ErrorTypeFromClass(ErrorTransient, err); got != "connection_refused" {
+		t.Errorf("expected connection_refused, got %s", got)
+	}
+}
+
+func TestErrorTypeFromClass_Timeout(t *testing.T) {
+	err := fmt.Errorf("context deadline exceeded")
+	if got := ErrorTypeFromClass(ErrorTransient, err); got != "timeout" {
+		t.Errorf("expected timeout, got %s", got)
+	}
+}
+
+func TestErrorTypeFromClass_Auth(t *testing.T) {
+	err := fmt.Errorf("invalid api key")
+	if got := ErrorTypeFromClass(ErrorAuth, err); got != "invalid_key" {
+		t.Errorf("expected invalid_key, got %s", got)
+	}
+}
+
+func TestErrorTypeFromClass_ModelNotFound(t *testing.T) {
+	err := fmt.Errorf("model not found")
+	if got := ErrorTypeFromClass(ErrorModelNotFound, err); got != "model_not_found" {
+		t.Errorf("expected model_not_found, got %s", got)
+	}
+}
+
+func TestErrorTypeFromClass_Unknown(t *testing.T) {
+	err := fmt.Errorf("something weird")
+	if got := ErrorTypeFromClass(ErrorOther, err); got != "unknown" {
+		t.Errorf("expected unknown, got %s", got)
+	}
+}
+
+func TestErrorTypeFromClass_NilError(t *testing.T) {
+	if got := ErrorTypeFromClass(ErrorOther, nil); got != "unknown" {
+		t.Errorf("expected unknown for nil error, got %s", got)
+	}
+}

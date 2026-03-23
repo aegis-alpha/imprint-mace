@@ -15,12 +15,20 @@ function getAdapterPath(): string | null {
     return null;
   }
 
-  const relative = join(dirname(__dirname), "..", "adapter", "openclaw-adapter");
-  if (existsSync(relative)) return relative;
+  const candidates = [
+    join(dirname(__dirname), "..", "adapter", "openclaw-adapter"),
+    join(homedir(), ".imprint", "adapter", "openclaw-adapter"),
+    join(homedir(), "imprint-mace", "integrations", "openclaw", "adapter", "openclaw-adapter"),
+  ];
+
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
 
   console.error(
-    `[imprint-transcript] adapter not found at ${relative} -- ` +
-      `set IMPRINT_ADAPTER_PATH or install the adapter`,
+    `[imprint-transcript] adapter not found in any of:\n` +
+      candidates.map((p) => `  - ${p}`).join("\n") +
+      `\nSet IMPRINT_ADAPTER_PATH or install the adapter`,
   );
   return null;
 }

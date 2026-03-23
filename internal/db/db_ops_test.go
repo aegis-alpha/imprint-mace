@@ -211,3 +211,48 @@ func TestExpireOldRetries(t *testing.T) {
 		t.Errorf("expected 1 remaining entry, got %d", len(entries))
 	}
 }
+
+func TestRetryQueueDepth(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	depth, err := store.RetryQueueDepth(ctx)
+	if err != nil {
+		t.Fatalf("depth empty: %v", err)
+	}
+	if depth != 0 {
+		t.Errorf("expected 0 depth on empty queue, got %d", depth)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := store.EnqueueRetry(ctx, &RetryEntry{
+			ID:        NewID(),
+			TaskType:  "extraction",
+			Payload:   `{}`,
+			CreatedAt: time.Now().UTC().Truncate(time.Second),
+			Status:    "pending",
+		}); err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+	}
+
+	depth, err = store.RetryQueueDepth(ctx)
+	if err != nil {
+		t.Fatalf("depth after enqueue: %v", err)
+	}
+	if depth != 3 {
+		t.Errorf("expected depth 3, got %d", depth)
+	}
+
+	if err := store.UpdateRetryStatus(ctx, "", "completed", ""); err == nil {
+		_, _ = store.DequeueRetries(ctx, 1)
+	}
+
+	depth, err = store.RetryQueueDepth(ctx)
+	if err != nil {
+		t.Fatalf("depth after dequeue: %v", err)
+	}
+	if depth != 3 {
+		t.Errorf("expected depth 3 (1 processing + 2 pending), got %d", depth)
+	}
+}
