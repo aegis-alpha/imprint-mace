@@ -940,6 +940,9 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 					minFacts = 10
 				}
 				sched := consolidation.NewScheduler(cons, store, interval, minFacts, cfg.Consolidation.MaxGroupSize, logger)
+				sched.SetPostTickFunc(func(tickCtx context.Context) {
+					runRetrievalEvalQuiet(tickCtx, logger, cfg, store)
+				})
 				schedCtx, schedCancel := context.WithCancel(context.Background())
 				defer schedCancel()
 				go sched.Run(schedCtx)
@@ -1528,6 +1531,57 @@ func autoUpdateBaseline(ctx context.Context, logger *slog.Logger, store *db.SQLi
 			fmt.Fprintf(os.Stderr, "Baseline updated (%.4f -> %.4f)\n", current.Score, run.Score)
 		}
 	}
+}
+
+func runRetrievalEvalQuiet(ctx context.Context, logger *slog.Logger, cfg *config.Config, mainStore *db.SQLiteStore) {
+	tmpDir, err := os.MkdirTemp("", "imprint-eval-retrieval-*")
+	if err != nil {
+		logger.Warn("retrieval eval skipped: temp dir failed", "error", err)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpDBPath := filepath.Join(tmpDir, "eval.db")
+	tmpStore, err := db.Open(tmpDBPath)
+	if err != nil {
+		logger.Warn("retrieval eval skipped: db open failed", "error", err)
+		return
+	}
+	defer tmpStore.Close()
+
+	seed := impeval.BuiltinRetrievalSeed()
+	nf, _, _, err := impeval.SeedDB(ctx, tmpStore, seed)
+	if err != nil {
+		logger.Warn("retrieval eval skipped: seed failed", "error", err)
+		return
+	}
+
+	queryProviders := cfg.Providers.Query
+	if len(queryProviders) == 0 {
+		queryProviders = cfg.Providers.Extraction
+	}
+	chain, err := provider.NewChain(queryProviders)
+	if err != nil {
+		logger.Warn("retrieval eval skipped: no query provider", "error", err)
+		return
+	}
+
+	q := query.New(tmpStore, nil, chain, "", logger)
+	examples := impeval.BuiltinRetrievalExamples()
+
+	report, err := impeval.RunRetrieval(ctx, q, examples)
+	if err != nil {
+		logger.Warn("retrieval eval failed", "error", err)
+		return
+	}
+
+	logger.Info("retrieval eval complete",
+		"recall_at_10", fmt.Sprintf("%.4f", report.RecallAt10),
+		"mrr", fmt.Sprintf("%.4f", report.MRR),
+		"questions", len(examples),
+		"seed_facts", nf,
+	)
+	persistRetrievalEval(ctx, logger, cfg, report)
 }
 
 func gitCommitShort() string {

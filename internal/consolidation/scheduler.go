@@ -17,12 +17,13 @@ type Runner interface {
 // background loop. It checks the min_facts threshold before each
 // run and shuts down gracefully via context cancellation.
 type Scheduler struct {
-	runner   Runner
-	store    db.Store
-	interval time.Duration
-	minFacts int
-	maxGroup int
-	logger   *slog.Logger
+	runner       Runner
+	store        db.Store
+	interval     time.Duration
+	minFacts     int
+	maxGroup     int
+	logger       *slog.Logger
+	postTickFunc func(ctx context.Context)
 }
 
 // NewScheduler creates a Scheduler.
@@ -35,6 +36,11 @@ func NewScheduler(runner Runner, store db.Store, interval time.Duration, minFact
 		maxGroup: maxGroup,
 		logger:   logger,
 	}
+}
+
+// SetPostTickFunc sets a callback invoked after each successful consolidation tick.
+func (s *Scheduler) SetPostTickFunc(f func(ctx context.Context)) {
+	s.postTickFunc = f
 }
 
 // Run blocks until ctx is cancelled, running consolidation on each tick.
@@ -91,5 +97,9 @@ func (s *Scheduler) tick(ctx context.Context) {
 			"clusters", len(results),
 			"connections", totalConns,
 		)
+	}
+
+	if s.postTickFunc != nil {
+		s.postTickFunc(ctx)
 	}
 }
