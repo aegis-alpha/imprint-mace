@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -75,9 +76,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  mcp                       Start MCP server (stdio transport)")
 		fmt.Fprintln(os.Stderr, "  export [--format=json|csv] [--output=path] Export knowledge base")
 		fmt.Fprintln(os.Stderr, "  context [HINT]            Build context snapshot for system prompt injection")
-		fmt.Fprintln(os.Stderr, "  eval --golden=PATH [--format=json|table] Evaluate extraction quality against golden set")
+		fmt.Fprintln(os.Stderr, "  eval --golden=PATH [--format=json|table] [--save-baseline] [--check] [--threshold=N]")
+		fmt.Fprintln(os.Stderr, "                                          Evaluate extraction quality against golden set")
 		fmt.Fprintln(os.Stderr, "  eval generate [--output=PATH]           Generate built-in golden eval dataset (default: testdata/golden/)")
-		fmt.Fprintln(os.Stderr, "  eval-retrieval [--format=json|table] [--no-embedder] Evaluate retrieval quality (Recall@10, MRR)")
+		fmt.Fprintln(os.Stderr, "  eval-retrieval [--format=json|table] [--no-embedder] [--save-baseline] [--check] [--threshold=N]")
+		fmt.Fprintln(os.Stderr, "                                          Evaluate retrieval quality (Recall@10, MRR)")
+		fmt.Fprintln(os.Stderr, "  eval-history [--type=extraction|retrieval] [--limit=N] Show eval score history")
 		fmt.Fprintln(os.Stderr, "  optimize                  Run one prompt optimization cycle (Karpathy loop)")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
 		fmt.Fprintln(os.Stderr, "  version                   Print version and exit")
@@ -180,32 +184,60 @@ func main() {
 			break
 		}
 		goldenDir, format := "", "table"
+		saveBaseline, check := false, false
+		threshold := 0.05
 		for _, a := range args[1:] {
 			switch {
 			case strings.HasPrefix(a, "--golden="):
 				goldenDir = a[9:]
 			case strings.HasPrefix(a, "--format="):
 				format = a[9:]
+			case a == "--save-baseline":
+				saveBaseline = true
+			case a == "--check":
+				check = true
+			case strings.HasPrefix(a, "--threshold="):
+				fmt.Sscanf(a[12:], "%f", &threshold) //nolint:gosec
 			}
 		}
 		if goldenDir == "" {
-			fmt.Fprintln(os.Stderr, "Usage: imprint eval --golden=PATH [--format=json|table]")
+			fmt.Fprintln(os.Stderr, "Usage: imprint eval --golden=PATH [--format=json|table] [--save-baseline] [--check] [--threshold=N]")
 			fmt.Fprintln(os.Stderr, "       imprint eval generate [--output=PATH]")
 			os.Exit(1)
 		}
-		runEval(logger, *cfgPath, goldenDir, format)
+		runEval(logger, *cfgPath, goldenDir, format, saveBaseline, check, threshold)
 	case "eval-retrieval":
 		format := "table"
 		noEmbedder := false
+		saveBaseline, check := false, false
+		threshold := 0.05
 		for _, a := range args[1:] {
 			switch {
 			case strings.HasPrefix(a, "--format="):
 				format = a[9:]
 			case a == "--no-embedder":
 				noEmbedder = true
+			case a == "--save-baseline":
+				saveBaseline = true
+			case a == "--check":
+				check = true
+			case strings.HasPrefix(a, "--threshold="):
+				fmt.Sscanf(a[12:], "%f", &threshold) //nolint:gosec
 			}
 		}
-		runEvalRetrieval(logger, *cfgPath, format, noEmbedder)
+		runEvalRetrieval(logger, *cfgPath, format, noEmbedder, saveBaseline, check, threshold)
+	case "eval-history":
+		evalType := ""
+		limit := 10
+		for _, a := range args[1:] {
+			switch {
+			case strings.HasPrefix(a, "--type="):
+				evalType = a[7:]
+			case strings.HasPrefix(a, "--limit="):
+				fmt.Sscanf(a[8:], "%d", &limit) //nolint:gosec
+			}
+		}
+		runEvalHistory(logger, *cfgPath, evalType, limit)
 	case "optimize":
 		runOptimizeCmd(logger, *cfgPath)
 	case "gc":
@@ -1242,7 +1274,7 @@ func runEvalGenerate(logger *slog.Logger, outputDir string) {
 		result.Total, result.Positive, result.Noise, result.Dir)
 }
 
-func runEval(logger *slog.Logger, cfgPath, goldenDir, format string) {
+func runEval(logger *slog.Logger, cfgPath, goldenDir, format string, saveBaseline, check bool, threshold float64) {
 	cfg := loadConfig(logger, cfgPath)
 
 	chain, err := provider.NewChain(cfg.Providers.Extraction)
@@ -1292,10 +1324,25 @@ func runEval(logger *slog.Logger, cfgPath, goldenDir, format string) {
 		impeval.WriteTable(os.Stdout, report)
 	}
 
-	persistExtractionEval(ctx, logger, cfg, report, evalPromptPath)
+	runID := persistExtractionEval(ctx, logger, cfg, report, evalPromptPath)
+
+	store := openStore(logger, cfg)
+	defer store.Close()
+
+	if saveBaseline && runID != "" {
+		if err := store.SetBaseline(ctx, runID, "extraction"); err != nil {
+			logger.Error("failed to set baseline", "error", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "Baseline saved for extraction eval")
+		}
+	}
+
+	if check {
+		runRegressionCheck(ctx, logger, store, "extraction", report.Composite, threshold)
+	}
 }
 
-func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bool) {
+func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, saveBaseline, check bool, threshold float64) {
 	cfg := loadConfig(logger, cfgPath)
 
 	tmpDir, err := os.MkdirTemp("", "imprint-eval-retrieval-*")
@@ -1306,17 +1353,17 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 	defer os.RemoveAll(tmpDir)
 
 	tmpDBPath := filepath.Join(tmpDir, "eval.db")
-	store, err := db.Open(tmpDBPath)
+	tmpStore, err := db.Open(tmpDBPath)
 	if err != nil {
 		logger.Error("failed to open temp database", "error", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer tmpStore.Close()
 
 	ctx := context.Background()
 
 	seed := impeval.BuiltinRetrievalSeed()
-	nf, ne, nr, err := impeval.SeedDB(ctx, store, seed)
+	nf, ne, nr, err := impeval.SeedDB(ctx, tmpStore, seed)
 	if err != nil {
 		logger.Error("failed to seed eval database", "error", err)
 		os.Exit(1)
@@ -1330,7 +1377,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 			embedder = embChain
 
 			dims := cfg.EffectiveEmbeddingDims()
-			if err := store.EnsureVecTable(ctx, dims); err != nil {
+			if err := tmpStore.EnsureVecTable(ctx, dims); err != nil {
 				logger.Error("failed to initialize vector table", "error", err)
 				os.Exit(1)
 			}
@@ -1343,7 +1390,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 					logger.Warn("embed seed fact failed", "fact_id", f.ID, "error", err)
 					continue
 				}
-				if err := store.UpdateFactEmbedding(ctx, f.ID, vec, embChain.ModelName()); err != nil {
+				if err := tmpStore.UpdateFactEmbedding(ctx, f.ID, vec, embChain.ModelName()); err != nil {
 					logger.Warn("store seed embedding failed", "fact_id", f.ID, "error", err)
 				}
 			}
@@ -1364,7 +1411,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 		os.Exit(1)
 	}
 
-	q := query.New(store, embedder, chain, "", logger)
+	q := query.New(tmpStore, embedder, chain, "", logger)
 
 	examples := impeval.BuiltinRetrievalExamples()
 	fmt.Fprintf(os.Stderr, "Running retrieval eval: %d questions\n", len(examples))
@@ -1385,17 +1432,32 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 		impeval.WriteRetrievalTable(os.Stdout, report)
 	}
 
-	persistRetrievalEval(ctx, logger, cfg, report)
+	runID := persistRetrievalEval(ctx, logger, cfg, report)
+
+	mainStore := openStore(logger, cfg)
+	defer mainStore.Close()
+
+	if saveBaseline && runID != "" {
+		if err := mainStore.SetBaseline(ctx, runID, "retrieval"); err != nil {
+			logger.Error("failed to set baseline", "error", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "Baseline saved for retrieval eval")
+		}
+	}
+
+	if check {
+		runRegressionCheck(ctx, logger, mainStore, "retrieval", report.RecallAt10, threshold)
+	}
 }
 
-func persistExtractionEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.Report, promptPath string) {
+func persistExtractionEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.Report, promptPath string) string {
 	store := openStore(logger, cfg)
 	defer store.Close()
 
 	reportJSON, err := json.Marshal(report)
 	if err != nil {
 		logger.Warn("failed to marshal eval report for persistence", "error", err)
-		return
+		return ""
 	}
 
 	promptData, _ := os.ReadFile(promptPath) //nolint:gosec // path from config, not user input
@@ -1408,23 +1470,25 @@ func persistExtractionEval(ctx context.Context, logger *slog.Logger, cfg *config
 		ExamplesCount: report.GoldenCount,
 		Report:        string(reportJSON),
 		PromptHash:    promptHash,
+		GitCommit:     gitCommitShort(),
 		CreatedAt:     time.Now().UTC(),
 	}
 	if err := store.CreateEvalRun(ctx, run); err != nil {
 		logger.Warn("failed to persist eval run", "error", err)
-		return
+		return ""
 	}
 	fmt.Fprintf(os.Stderr, "Eval run saved (composite=%.4f, id=%s)\n", run.Score, run.ID)
+	return run.ID
 }
 
-func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.RetrievalReport) {
+func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.RetrievalReport) string {
 	store := openStore(logger, cfg)
 	defer store.Close()
 
 	reportJSON, err := json.Marshal(report)
 	if err != nil {
 		logger.Warn("failed to marshal retrieval report for persistence", "error", err)
-		return
+		return ""
 	}
 
 	run := &db.EvalRun{
@@ -1434,13 +1498,98 @@ func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.
 		Score2:        report.MRR,
 		ExamplesCount: report.TotalQuestions,
 		Report:        string(reportJSON),
+		GitCommit:     gitCommitShort(),
 		CreatedAt:     time.Now().UTC(),
 	}
 	if err := store.CreateEvalRun(ctx, run); err != nil {
 		logger.Warn("failed to persist retrieval eval run", "error", err)
-		return
+		return ""
 	}
 	fmt.Fprintf(os.Stderr, "Retrieval eval run saved (recall@10=%.4f, mrr=%.4f, id=%s)\n", run.Score, run.Score2, run.ID)
+	return run.ID
+}
+
+func gitCommitShort() string {
+	out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func runEvalHistory(logger *slog.Logger, cfgPath, evalType string, limit int) {
+	cfg := loadConfig(logger, cfgPath)
+	store := openStore(logger, cfg)
+	defer store.Close()
+
+	ctx := context.Background()
+	runs, err := store.ListEvalRuns(ctx, evalType, limit)
+	if err != nil {
+		logger.Error("failed to list eval runs", "error", err)
+		os.Exit(1)
+	}
+
+	if len(runs) == 0 {
+		fmt.Println("No eval runs found.")
+		return
+	}
+
+	fmt.Printf("%-20s %-12s %-8s %10s %10s %8s %8s %s\n",
+		"Date", "Type", "Commit", "Score", "Score2", "N", "Delta", "Baseline")
+	fmt.Println(strings.Repeat("-", 90))
+
+	for i, r := range runs {
+		commit := r.GitCommit
+		if commit == "" {
+			commit = "-"
+		}
+		baseline := ""
+		if r.IsBaseline {
+			baseline = " *"
+		}
+
+		delta := ""
+		if i+1 < len(runs) && runs[i+1].EvalType == r.EvalType {
+			d := r.Score - runs[i+1].Score
+			if d >= 0 {
+				delta = fmt.Sprintf("+%.4f", d)
+			} else {
+				delta = fmt.Sprintf("%.4f", d)
+			}
+		}
+
+		score2 := ""
+		if r.Score2 != 0 {
+			score2 = fmt.Sprintf("%.4f", r.Score2)
+		}
+
+		fmt.Printf("%-20s %-12s %-8s %10.4f %10s %8d %8s%s\n",
+			r.CreatedAt.Format("2006-01-02 15:04:05"),
+			r.EvalType, commit, r.Score, score2,
+			r.ExamplesCount, delta, baseline)
+	}
+}
+
+func runRegressionCheck(ctx context.Context, logger *slog.Logger, store *db.SQLiteStore, evalType string, currentScore, threshold float64) {
+	baseline, err := store.GetBaselineEvalRun(ctx, evalType)
+	if err != nil {
+		logger.Error("failed to get baseline", "error", err)
+		os.Exit(1)
+	}
+	if baseline == nil {
+		fmt.Fprintf(os.Stderr, "No baseline set for %s -- skipping regression check\n", evalType)
+		return
+	}
+
+	passed, delta := impeval.CheckRegression(currentScore, baseline.Score, threshold)
+	fmt.Fprintf(os.Stderr, "Regression check (%s): current=%.4f baseline=%.4f delta=%+.4f threshold=%.4f",
+		evalType, currentScore, baseline.Score, delta, threshold)
+	if passed {
+		fmt.Fprintln(os.Stderr, " PASSED")
+	} else {
+		fmt.Fprintln(os.Stderr, " FAILED")
+		os.Exit(1)
+	}
 }
 
 func runOptimizeCmd(logger *slog.Logger, cfgPath string) {

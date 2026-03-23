@@ -37,7 +37,10 @@ jobs:
         run: CGO_ENABLED=1 go vet -tags sqlite_fts5 ./...
 
       - name: Build
-        run: CGO_ENABLED=1 go build -tags sqlite_fts5 -o /dev/null ./cmd/imprint
+        run: CGO_ENABLED=1 go build -tags sqlite_fts5 -o imprint ./cmd/imprint
+
+      - name: Retrieval eval
+        run: ./imprint eval-retrieval --no-embedder --format=table
 
       - name: PII check
         run: |

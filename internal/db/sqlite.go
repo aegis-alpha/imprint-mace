@@ -1715,10 +1715,15 @@ func (s *SQLiteStore) CreateFactCitation(ctx context.Context, factID, queryID st
 // --- Eval runs ---
 
 func (s *SQLiteStore) CreateEvalRun(ctx context.Context, r *EvalRun) error {
+	baseline := 0
+	if r.IsBaseline {
+		baseline = 1
+	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO eval_runs (id, eval_type, score, score2, report, prompt_hash, examples_count, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO eval_runs (id, eval_type, score, score2, report, prompt_hash, examples_count, is_baseline, git_commit, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, r.EvalType, r.Score, r.Score2, r.Report, r.PromptHash, r.ExamplesCount,
+		baseline, nilIfEmpty(r.GitCommit),
 		r.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	)
 	return err
@@ -1726,21 +1731,109 @@ func (s *SQLiteStore) CreateEvalRun(ctx context.Context, r *EvalRun) error {
 
 func (s *SQLiteStore) LatestEvalRun(ctx context.Context, evalType string) (*EvalRun, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, eval_type, score, score2, prompt_hash, examples_count, created_at
+		SELECT id, eval_type, score, score2, prompt_hash, examples_count, is_baseline, git_commit, created_at
 		FROM eval_runs WHERE eval_type = ? ORDER BY created_at DESC LIMIT 1`, evalType)
 
 	var r EvalRun
 	var createdAt string
 	var score2 *float64
-	err := row.Scan(&r.ID, &r.EvalType, &r.Score, &score2, &r.PromptHash, &r.ExamplesCount, &createdAt)
+	var isBaseline int
+	var gitCommit *string
+	err := row.Scan(&r.ID, &r.EvalType, &r.Score, &score2, &r.PromptHash, &r.ExamplesCount, &isBaseline, &gitCommit, &createdAt)
 	if err != nil {
 		return nil, err
 	}
 	if score2 != nil {
 		r.Score2 = *score2
 	}
+	r.IsBaseline = isBaseline == 1
+	if gitCommit != nil {
+		r.GitCommit = *gitCommit
+	}
 	r.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
 	return &r, nil
+}
+
+func (s *SQLiteStore) ListEvalRuns(ctx context.Context, evalType string, limit int) ([]EvalRun, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, eval_type, score, score2, prompt_hash, examples_count, is_baseline, git_commit, created_at
+		FROM eval_runs
+		WHERE (eval_type = ? OR ? = '')
+		ORDER BY created_at DESC
+		LIMIT ?`, evalType, evalType, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []EvalRun
+	for rows.Next() {
+		var r EvalRun
+		var createdAt string
+		var score2 *float64
+		var isBaseline int
+		var gitCommit *string
+		if err := rows.Scan(&r.ID, &r.EvalType, &r.Score, &score2, &r.PromptHash, &r.ExamplesCount, &isBaseline, &gitCommit, &createdAt); err != nil {
+			return nil, err
+		}
+		if score2 != nil {
+			r.Score2 = *score2
+		}
+		r.IsBaseline = isBaseline == 1
+		if gitCommit != nil {
+			r.GitCommit = *gitCommit
+		}
+		r.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
+func (s *SQLiteStore) GetBaselineEvalRun(ctx context.Context, evalType string) (*EvalRun, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, eval_type, score, score2, prompt_hash, examples_count, is_baseline, git_commit, created_at
+		FROM eval_runs WHERE eval_type = ? AND is_baseline = 1 LIMIT 1`, evalType)
+
+	var r EvalRun
+	var createdAt string
+	var score2 *float64
+	var isBaseline int
+	var gitCommit *string
+	err := row.Scan(&r.ID, &r.EvalType, &r.Score, &score2, &r.PromptHash, &r.ExamplesCount, &isBaseline, &gitCommit, &createdAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if score2 != nil {
+		r.Score2 = *score2
+	}
+	r.IsBaseline = isBaseline == 1
+	if gitCommit != nil {
+		r.GitCommit = *gitCommit
+	}
+	r.CreatedAt, _ = time.Parse("2006-01-02T15:04:05Z", createdAt)
+	return &r, nil
+}
+
+func (s *SQLiteStore) SetBaseline(ctx context.Context, id string, evalType string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.ExecContext(ctx, `UPDATE eval_runs SET is_baseline = 0 WHERE eval_type = ?`, evalType); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE eval_runs SET is_baseline = 1 WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // --- Query log ---

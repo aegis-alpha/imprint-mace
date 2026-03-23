@@ -438,8 +438,10 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `serve` | `[--host=H] [--port=P] [--watch=PATH]` | Start HTTP API server. `--watch` starts a file watcher alongside the server. |
 | `mcp` | -- | Start MCP server (stdio transport) |
 | `export` | `[--format=json\|csv] [--output=path]` | Export entire knowledge base |
-| `eval` | `--golden=PATH [--format=json\|table]` | Evaluate extraction quality against a golden dataset |
+| `eval` | `--golden=PATH [--format=json\|table] [--save-baseline] [--check] [--threshold=N]` | Evaluate extraction quality against a golden dataset. `--save-baseline` marks this run as the reference point. `--check` compares with baseline and exits non-zero on regression. Default threshold: 0.05. |
 | `eval generate` | `[--output=PATH]` | Generate built-in golden eval dataset (default: `testdata/golden/`) |
+| `eval-retrieval` | `[--format=json\|table] [--no-embedder] [--save-baseline] [--check] [--threshold=N]` | Evaluate retrieval quality (Recall@10, MRR). `--no-embedder` runs text+graph only. `--save-baseline` / `--check` work the same as for `eval`. |
+| `eval-history` | `[--type=extraction\|retrieval] [--limit=N]` | Show eval score history with deltas and baseline markers. Default limit: 10. |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
 | `version` | -- | Print version and exit |
 
@@ -499,6 +501,12 @@ imprint eval --golden=testdata/golden/
 # Evaluate and output JSON report
 imprint eval --golden=testdata/golden/ --format=json
 
+# Evaluate and save as baseline
+imprint eval --golden=testdata/golden/ --save-baseline
+
+# Evaluate and check against baseline (exit 1 on regression)
+imprint eval --golden=testdata/golden/ --check
+
 # Build context snapshot (no LLM, for system prompt injection)
 imprint context "current project topic"
 
@@ -510,6 +518,18 @@ imprint eval-retrieval --no-embedder
 
 # Evaluate retrieval with JSON output
 imprint eval-retrieval --format=json
+
+# Evaluate retrieval and save as baseline
+imprint eval-retrieval --no-embedder --save-baseline
+
+# Check retrieval against baseline with custom threshold
+imprint eval-retrieval --no-embedder --check --threshold=0.03
+
+# Show eval history (all types)
+imprint eval-history
+
+# Show extraction eval history only
+imprint eval-history --type=extraction --limit=20
 
 # Run one prompt optimization cycle (Karpathy loop)
 imprint optimize

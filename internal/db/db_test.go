@@ -1888,6 +1888,150 @@ func TestCreateQueryLog_WithError(t *testing.T) {
 	}
 }
 
+// --- Eval runs: list, baseline, git commit ---
+
+func TestEvalRun_CreateAndList(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	runs := []struct {
+		evalType string
+		score    float64
+		score2   float64
+		delay    time.Duration
+	}{
+		{"extraction", 0.75, 0, 0},
+		{"extraction", 0.80, 0, time.Second},
+		{"retrieval", 0.90, 0.85, 2 * time.Second},
+	}
+	for _, r := range runs {
+		store.CreateEvalRun(ctx, &EvalRun{
+			ID:            NewID(),
+			EvalType:      r.evalType,
+			Score:         r.score,
+			Score2:        r.score2,
+			Report:        "{}",
+			ExamplesCount: 10,
+			CreatedAt:     now.Add(r.delay),
+		})
+	}
+
+	extraction, err := store.ListEvalRuns(ctx, "extraction", 10)
+	if err != nil {
+		t.Fatalf("ListEvalRuns(extraction): %v", err)
+	}
+	if len(extraction) != 2 {
+		t.Fatalf("expected 2 extraction runs, got %d", len(extraction))
+	}
+	if extraction[0].Score < extraction[1].Score {
+		t.Error("expected DESC order by created_at (newest first)")
+	}
+
+	retrieval, err := store.ListEvalRuns(ctx, "retrieval", 10)
+	if err != nil {
+		t.Fatalf("ListEvalRuns(retrieval): %v", err)
+	}
+	if len(retrieval) != 1 {
+		t.Fatalf("expected 1 retrieval run, got %d", len(retrieval))
+	}
+
+	all, err := store.ListEvalRuns(ctx, "", 10)
+	if err != nil {
+		t.Fatalf("ListEvalRuns(all): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 total runs, got %d", len(all))
+	}
+}
+
+func TestEvalRun_Baseline(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	run1 := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.70,
+		Report: "{}", ExamplesCount: 10, CreatedAt: now,
+	}
+	run2 := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.80,
+		Report: "{}", ExamplesCount: 10, CreatedAt: now.Add(time.Second),
+	}
+	store.CreateEvalRun(ctx, run1)
+	store.CreateEvalRun(ctx, run2)
+
+	if err := store.SetBaseline(ctx, run1.ID, "extraction"); err != nil {
+		t.Fatalf("SetBaseline(run1): %v", err)
+	}
+	got, err := store.GetBaselineEvalRun(ctx, "extraction")
+	if err != nil {
+		t.Fatalf("GetBaselineEvalRun: %v", err)
+	}
+	if got.ID != run1.ID {
+		t.Errorf("expected baseline run1 (%s), got %s", run1.ID, got.ID)
+	}
+
+	if err := store.SetBaseline(ctx, run2.ID, "extraction"); err != nil {
+		t.Fatalf("SetBaseline(run2): %v", err)
+	}
+	got, err = store.GetBaselineEvalRun(ctx, "extraction")
+	if err != nil {
+		t.Fatalf("GetBaselineEvalRun after replace: %v", err)
+	}
+	if got.ID != run2.ID {
+		t.Errorf("expected baseline run2 (%s), got %s", run2.ID, got.ID)
+	}
+
+	listed, _ := store.ListEvalRuns(ctx, "extraction", 10)
+	for _, r := range listed {
+		if r.ID == run1.ID && r.IsBaseline {
+			t.Error("run1 should no longer be baseline")
+		}
+		if r.ID == run2.ID && !r.IsBaseline {
+			t.Error("run2 should be baseline")
+		}
+	}
+}
+
+func TestEvalRun_GetBaseline_NoBaseline(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	store.CreateEvalRun(ctx, &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.70,
+		Report: "{}", ExamplesCount: 10, CreatedAt: time.Now().UTC(),
+	})
+
+	got, err := store.GetBaselineEvalRun(ctx, "extraction")
+	if err != nil {
+		t.Fatalf("GetBaselineEvalRun: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil when no baseline set, got %+v", got)
+	}
+}
+
+func TestEvalRun_GitCommit(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	run := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.75,
+		Report: "{}", ExamplesCount: 10, GitCommit: "abc1234",
+		CreatedAt: time.Now().UTC(),
+	}
+	store.CreateEvalRun(ctx, run)
+
+	got, err := store.LatestEvalRun(ctx, "extraction")
+	if err != nil {
+		t.Fatalf("LatestEvalRun: %v", err)
+	}
+	if got.GitCommit != "abc1234" {
+		t.Errorf("expected git_commit 'abc1234', got %q", got.GitCommit)
+	}
+}
+
 func TestQueryLogStats(t *testing.T) {
 	store := openTestDB(t)
 	ctx := context.Background()

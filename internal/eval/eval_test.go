@@ -295,6 +295,48 @@ func TestCompositeScore(t *testing.T) {
 	}
 }
 
+// --- CheckRegression ---
+
+func TestCheckRegression_NoRegression(t *testing.T) {
+	passed, delta := CheckRegression(0.75, 0.72, 0.05)
+	if !passed {
+		t.Error("expected passed=true for improvement")
+	}
+	if math.Abs(delta-0.03) > 0.001 {
+		t.Errorf("expected delta=+0.03, got %f", delta)
+	}
+}
+
+func TestCheckRegression_WithRegression(t *testing.T) {
+	passed, delta := CheckRegression(0.65, 0.72, 0.05)
+	if passed {
+		t.Error("expected passed=false for regression beyond threshold")
+	}
+	if math.Abs(delta-(-0.07)) > 0.001 {
+		t.Errorf("expected delta=-0.07, got %f", delta)
+	}
+}
+
+func TestCheckRegression_ExactThreshold(t *testing.T) {
+	passed, delta := CheckRegression(0.67, 0.72, 0.05)
+	if !passed {
+		t.Error("expected passed=true when delta equals negative threshold exactly")
+	}
+	if math.Abs(delta-(-0.05)) > 0.001 {
+		t.Errorf("expected delta=-0.05, got %f", delta)
+	}
+}
+
+func TestCheckRegression_ZeroBaseline(t *testing.T) {
+	passed, delta := CheckRegression(0.50, 0.0, 0.05)
+	if !passed {
+		t.Error("expected passed=true when baseline is zero (no meaningful baseline)")
+	}
+	if math.Abs(delta-0.50) > 0.001 {
+		t.Errorf("expected delta=+0.50, got %f", delta)
+	}
+}
+
 // --- LoadGoldenDir ---
 
 func TestLoadGoldenDir(t *testing.T) {

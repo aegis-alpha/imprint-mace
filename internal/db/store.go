@@ -71,9 +71,12 @@ type Store interface {
 	ListQueryLogs(ctx context.Context, limit int) ([]QueryLog, error)
 	QueryLogStats(ctx context.Context, windowDays int) (*QueryLogStatsResult, error)
 
-	// Eval runs (BVP-308)
+	// Eval runs (BVP-308, BVP-315)
 	CreateEvalRun(ctx context.Context, r *EvalRun) error
 	LatestEvalRun(ctx context.Context, evalType string) (*EvalRun, error)
+	ListEvalRuns(ctx context.Context, evalType string, limit int) ([]EvalRun, error)
+	GetBaselineEvalRun(ctx context.Context, evalType string) (*EvalRun, error)
+	SetBaseline(ctx context.Context, id string, evalType string) error
 
 	// Fact citations (BVP-279, D-Q1)
 	CreateFactCitation(ctx context.Context, factID, queryID string) error
@@ -284,6 +287,8 @@ type EvalRun struct {
 	Report        string  // full JSON
 	PromptHash    string
 	ExamplesCount int
+	IsBaseline    bool
+	GitCommit     string
 	CreatedAt     time.Time
 }
 
