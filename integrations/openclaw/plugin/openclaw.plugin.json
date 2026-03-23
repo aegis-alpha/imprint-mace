@@ -1,0 +1,18 @@
+{
+  "id": "imprint-context",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "imprintUrl": {
+        "type": "string",
+        "description": "Imprint server URL. Auto-discovered from ~/.imprint/serve.json if not set."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Request timeout in milliseconds.",
+        "default": 3000
+      }
+    },
+    "additionalProperties": false
+  }
+}
