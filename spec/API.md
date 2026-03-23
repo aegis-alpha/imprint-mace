@@ -438,10 +438,11 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `serve` | `[--host=H] [--port=P] [--watch=PATH]` | Start HTTP API server. `--watch` starts a file watcher alongside the server. |
 | `mcp` | -- | Start MCP server (stdio transport) |
 | `export` | `[--format=json\|csv] [--output=path]` | Export entire knowledge base |
-| `eval` | `--golden=PATH [--format=json\|table] [--save-baseline] [--check] [--threshold=N]` | Evaluate extraction quality against a golden dataset. `--save-baseline` marks this run as the reference point. `--check` compares with baseline and exits non-zero on regression. Default threshold: 0.05. |
+| `eval` | `--golden=PATH [--format=json\|table] [--save-baseline] [--check] [--threshold=N]` | Evaluate extraction quality against a golden dataset. Baseline is managed automatically: first run becomes baseline, subsequent runs update it on improvement. `--save-baseline` forces a manual override. `--check` compares with baseline and exits non-zero on regression. Default threshold: 0.05. |
 | `eval generate` | `[--output=PATH]` | Generate built-in golden eval dataset (default: `testdata/golden/`) |
-| `eval-retrieval` | `[--format=json\|table] [--no-embedder] [--save-baseline] [--check] [--threshold=N]` | Evaluate retrieval quality (Recall@10, MRR). `--no-embedder` runs text+graph only. `--save-baseline` / `--check` work the same as for `eval`. |
+| `eval-retrieval` | `[--format=json\|table] [--no-embedder] [--save-baseline] [--check] [--threshold=N]` | Evaluate retrieval quality (Recall@10, MRR). `--no-embedder` runs text+graph only. Same auto-baseline behavior as `eval`. |
 | `eval-history` | `[--type=extraction\|retrieval] [--limit=N]` | Show eval score history with deltas and baseline markers. Default limit: 10. |
+| `optimize` | -- | Run one prompt optimization cycle (Karpathy loop). After optimization, automatically runs both extraction and retrieval evals, persists results, and updates baselines. This is the primary way eval history accumulates. |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
 | `version` | -- | Print version and exit |
 

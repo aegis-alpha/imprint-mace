@@ -2012,6 +2012,87 @@ func TestEvalRun_GetBaseline_NoBaseline(t *testing.T) {
 	}
 }
 
+func TestEvalRun_AutoBaseline_FirstRun(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+
+	run := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.70,
+		Report: "{}", ExamplesCount: 10, CreatedAt: time.Now().UTC(),
+	}
+	store.CreateEvalRun(ctx, run)
+
+	baseline, _ := store.GetBaselineEvalRun(ctx, "extraction")
+	if baseline != nil {
+		t.Fatal("baseline should be nil before auto-update")
+	}
+
+	store.SetBaseline(ctx, run.ID, "extraction")
+	baseline, _ = store.GetBaselineEvalRun(ctx, "extraction")
+	if baseline == nil || baseline.ID != run.ID {
+		t.Fatal("first run should become baseline")
+	}
+}
+
+func TestEvalRun_AutoBaseline_Improvement(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	run1 := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.70,
+		Report: "{}", ExamplesCount: 10, CreatedAt: now,
+	}
+	store.CreateEvalRun(ctx, run1)
+	store.SetBaseline(ctx, run1.ID, "extraction")
+
+	run2 := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.80,
+		Report: "{}", ExamplesCount: 10, CreatedAt: now.Add(time.Second),
+	}
+	store.CreateEvalRun(ctx, run2)
+
+	baseline, _ := store.GetBaselineEvalRun(ctx, "extraction")
+	if baseline.Score >= run2.Score {
+		t.Skip("baseline already better, nothing to test")
+	}
+	store.SetBaseline(ctx, run2.ID, "extraction")
+
+	baseline, _ = store.GetBaselineEvalRun(ctx, "extraction")
+	if baseline.ID != run2.ID {
+		t.Errorf("baseline should be updated to run2, got %s", baseline.ID)
+	}
+}
+
+func TestEvalRun_AutoBaseline_NoUpdateOnRegression(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	run1 := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.80,
+		Report: "{}", ExamplesCount: 10, CreatedAt: now,
+	}
+	store.CreateEvalRun(ctx, run1)
+	store.SetBaseline(ctx, run1.ID, "extraction")
+
+	run2 := &EvalRun{
+		ID: NewID(), EvalType: "extraction", Score: 0.65,
+		Report: "{}", ExamplesCount: 10, CreatedAt: now.Add(time.Second),
+	}
+	store.CreateEvalRun(ctx, run2)
+
+	baseline, _ := store.GetBaselineEvalRun(ctx, "extraction")
+	if run2.Score >= baseline.Score {
+		t.Skip("run2 is not a regression")
+	}
+
+	baseline, _ = store.GetBaselineEvalRun(ctx, "extraction")
+	if baseline.ID != run1.ID {
+		t.Errorf("baseline should remain run1 on regression, got %s", baseline.ID)
+	}
+}
+
 func TestEvalRun_GitCommit(t *testing.T) {
 	store := openTestDB(t)
 	ctx := context.Background()

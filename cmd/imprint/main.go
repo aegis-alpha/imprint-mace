@@ -1663,6 +1663,96 @@ func runOptimizeCmd(logger *slog.Logger, cfgPath string) {
 		fmt.Printf("Candidate discarded: %.4f <= baseline %.4f\n",
 			result.CandidateScore, result.BaselineScore)
 	}
+
+	fmt.Println("\nRunning post-optimize eval...")
+	runPostOptimizeEval(logger, cfg, store, ctx)
+}
+
+func runPostOptimizeEval(logger *slog.Logger, cfg *config.Config, store *db.SQLiteStore, ctx context.Context) {
+	types := cfg.EffectiveTypes()
+	evalPromptPath := cfg.Prompts.Extraction
+	qcfg := cfg.EffectiveQualityConfig()
+	if qcfg.OptimizedPromptPath != "" {
+		if _, err := os.Stat(qcfg.OptimizedPromptPath); err == nil {
+			evalPromptPath = qcfg.OptimizedPromptPath
+		}
+	}
+
+	chain, err := provider.NewChain(cfg.Providers.Extraction)
+	if err != nil {
+		logger.Warn("post-optimize extraction eval skipped: no provider", "error", err)
+	} else {
+		extractor, err := extraction.New(chain, evalPromptPath, types, logger)
+		if err != nil {
+			logger.Warn("post-optimize extraction eval skipped: extractor init failed", "error", err)
+		} else {
+			var examples []impeval.GoldenExample
+			if qcfg.GoldenDir != "" {
+				examples, err = impeval.LoadGoldenDir(qcfg.GoldenDir)
+			} else {
+				tmpDir, _ := os.MkdirTemp("", "imprint-golden-*")
+				defer os.RemoveAll(tmpDir)
+				impeval.Generate(tmpDir)
+				examples, err = impeval.LoadGoldenDir(tmpDir)
+			}
+			if err != nil {
+				logger.Warn("post-optimize extraction eval skipped: golden load failed", "error", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "Extraction eval: %d examples\n", len(examples))
+				report, err := impeval.Run(ctx, extractor, examples, impeval.DefaultConfig())
+				if err != nil {
+					logger.Warn("post-optimize extraction eval failed", "error", err)
+				} else {
+					fmt.Fprintf(os.Stderr, "Extraction composite: %.4f\n", report.Composite)
+					persistExtractionEval(ctx, logger, cfg, report, evalPromptPath)
+				}
+			}
+		}
+	}
+
+	tmpDir, err := os.MkdirTemp("", "imprint-eval-retrieval-*")
+	if err != nil {
+		logger.Warn("post-optimize retrieval eval skipped: temp dir failed", "error", err)
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpDBPath := filepath.Join(tmpDir, "eval.db")
+	tmpStore, err := db.Open(tmpDBPath)
+	if err != nil {
+		logger.Warn("post-optimize retrieval eval skipped: db open failed", "error", err)
+		return
+	}
+	defer tmpStore.Close()
+
+	seed := impeval.BuiltinRetrievalSeed()
+	nf, _, _, err := impeval.SeedDB(ctx, tmpStore, seed)
+	if err != nil {
+		logger.Warn("post-optimize retrieval eval skipped: seed failed", "error", err)
+		return
+	}
+
+	queryProviders := cfg.Providers.Query
+	if len(queryProviders) == 0 {
+		queryProviders = cfg.Providers.Extraction
+	}
+	qchain, err := provider.NewChain(queryProviders)
+	if err != nil {
+		logger.Warn("post-optimize retrieval eval skipped: no query provider", "error", err)
+		return
+	}
+
+	q := query.New(tmpStore, nil, qchain, "", logger)
+	examples := impeval.BuiltinRetrievalExamples()
+	fmt.Fprintf(os.Stderr, "Retrieval eval: %d questions (%d seed facts, text+graph only)\n", len(examples), nf)
+
+	report, err := impeval.RunRetrieval(ctx, q, examples)
+	if err != nil {
+		logger.Warn("post-optimize retrieval eval failed", "error", err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Retrieval recall@10: %.4f  mrr: %.4f\n", report.RecallAt10, report.MRR)
+	persistRetrievalEval(ctx, logger, cfg, report)
 }
 
 func runGC(logger *slog.Logger, cfgPath string) {
