@@ -237,7 +237,7 @@ Each platform has a dedicated setup guide with MCP config, hook scripts, and rul
 | Cursor | sessionStart | Yes | SKILL.md | [integrations/cursor/](integrations/cursor/) |
 | Claude Code | SessionStart | Yes | AGENTS.md | [integrations/claude-code/](integrations/claude-code/) |
 | Gemini CLI | SessionStart | Yes | GEMINI.md | [integrations/gemini-cli/](integrations/gemini-cli/) |
-| OpenClaw | 3 hooks (ingest, query, transcript) | Yes | AGENTS.md + TOOLS.md | [integrations/openclaw/](integrations/openclaw/) |
+| OpenClaw | Plugin (context) + 2 hooks (ingest, transcript) | Yes | AGENTS.md + TOOLS.md | [integrations/openclaw/](integrations/openclaw/) |
 
 Hooks call `GET /context` (retrieval-only, 50-200ms). Agents that need full LLM-synthesized answers use the `imprint_query` MCP tool directly.
 

@@ -31,7 +31,10 @@ Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). N
 
 **Performance note:** Each `Engine.Ingest()` call triggers one LLM extraction (2-10 seconds depending on text length and provider). For bulk operations, callers should process items sequentially with retry and backoff, not in parallel. Concurrent LLM calls risk rate limits and timeouts.
 
-**OpenClaw integration:** The `imprint-ingest` hook listens for `message:preprocessed` events and sends the enriched message body to `POST /ingest` automatically. This is a deterministic integration path -- every message is ingested without model intervention. The `imprint-query` hook calls `GET /query` on the same event and injects the answer as agent context.
+**OpenClaw integration:** Two deterministic integration paths:
+
+1. **Ingest** (internal hook): The `imprint-ingest` hook listens for `message:preprocessed` events and sends the enriched message body to `POST /ingest` automatically. Every message is ingested without model intervention. This is a fire-and-forget hook -- the result is not needed by the gateway.
+2. **Context delivery** (plugin): The `imprint-context` plugin registers a `before_prompt_build` hook and calls `GET /context?hint=<message>`. The result is returned as `{ prependContext }` which OpenClaw injects into the agent's prompt. This is the only way to deterministically inject context -- internal hooks (`message:preprocessed`) are fire-and-forget and cannot modify the prompt.
 
 **Service discovery:** The server writes its actual listen address to `~/.imprint/serve.json` on startup. If the configured port is busy, it tries the next available port (up to +20). Hooks and other clients read this file to discover the server automatically. The file is removed on graceful shutdown.
 
