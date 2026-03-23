@@ -1478,6 +1478,7 @@ func persistExtractionEval(ctx context.Context, logger *slog.Logger, cfg *config
 		return ""
 	}
 	fmt.Fprintf(os.Stderr, "Eval run saved (composite=%.4f, id=%s)\n", run.Score, run.ID)
+	autoUpdateBaseline(ctx, logger, store, run)
 	return run.ID
 }
 
@@ -1506,7 +1507,27 @@ func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.
 		return ""
 	}
 	fmt.Fprintf(os.Stderr, "Retrieval eval run saved (recall@10=%.4f, mrr=%.4f, id=%s)\n", run.Score, run.Score2, run.ID)
+	autoUpdateBaseline(ctx, logger, store, run)
 	return run.ID
+}
+
+func autoUpdateBaseline(ctx context.Context, logger *slog.Logger, store *db.SQLiteStore, run *db.EvalRun) {
+	current, err := store.GetBaselineEvalRun(ctx, run.EvalType)
+	if err != nil {
+		logger.Warn("failed to check baseline", "error", err)
+		return
+	}
+	if current == nil || run.Score >= current.Score {
+		if err := store.SetBaseline(ctx, run.ID, run.EvalType); err != nil {
+			logger.Warn("failed to auto-update baseline", "error", err)
+			return
+		}
+		if current == nil {
+			fmt.Fprintf(os.Stderr, "Baseline set (first %s eval run)\n", run.EvalType)
+		} else {
+			fmt.Fprintf(os.Stderr, "Baseline updated (%.4f -> %.4f)\n", current.Score, run.Score)
+		}
+	}
 }
 
 func gitCommitShort() string {
