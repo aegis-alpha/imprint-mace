@@ -280,7 +280,9 @@ func (o *LoopOptimizer) execOnKept(result *OptimizeResult) {
 		return
 	}
 	go func() {
-		c := exec.CommandContext(context.Background(), args[0], args[1:]...) //nolint:gosec // configurable by operator
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		c := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // configurable by operator
 		c.Env = append(os.Environ(),
 			fmt.Sprintf("IMPRINT_KEPT_SCORE=%.4f", result.CandidateScore),
 			fmt.Sprintf("IMPRINT_BASELINE_SCORE=%.4f", result.BaselineScore),

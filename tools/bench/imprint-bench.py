@@ -207,7 +207,8 @@ def do_run(cfg: dict, trigger: str):
 
 def cmd_notify_kept(args):
     state = load_state()
-    state["kept_count"] = state.get("kept_count", 0) + 1
+    prev_count = state.get("kept_count", 0)
+    state["kept_count"] = prev_count + 1
 
     score = os.environ.get("IMPRINT_KEPT_SCORE", "?")
     baseline = os.environ.get("IMPRINT_BASELINE_SCORE", "?")
@@ -227,10 +228,11 @@ def cmd_notify_kept(args):
             state["last_score"] = report.get("accuracy", report.get("score"))
             state["total_runs"] = state.get("total_runs", 0) + 1
         except Exception as e:
+            state["kept_count"] = prev_count
             print(f"[imprint-bench] benchmark failed: {e}", file=sys.stderr)
             send_telegram(
                 cfg,
-                f"*LoCoMo benchmark FAILED*\nTrigger: kept #{state['kept_count']}\nError: {e}",
+                f"*LoCoMo benchmark FAILED*\nTrigger: kept #{prev_count + 1}\nError: {e}",
             )
 
     save_state(state)
