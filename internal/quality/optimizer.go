@@ -275,11 +275,11 @@ func (o *LoopOptimizer) resetFailures() {
 
 func (o *LoopOptimizer) execOnKept(result *OptimizeResult) {
 	cmd := o.cfg.OnKeptCommand
-	if cmd == "" {
+	args := strings.Fields(cmd)
+	if len(args) == 0 {
 		return
 	}
 	go func() {
-		args := strings.Fields(cmd)
 		c := exec.CommandContext(context.Background(), args[0], args[1:]...) //nolint:gosec // configurable by operator
 		c.Env = append(os.Environ(),
 			fmt.Sprintf("IMPRINT_KEPT_SCORE=%.4f", result.CandidateScore),
