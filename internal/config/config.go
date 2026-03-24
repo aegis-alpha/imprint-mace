@@ -197,7 +197,7 @@ func (c *Config) EffectiveQualityConfig() QualityConfig {
 		if c.DB.Path != "" {
 			q.OptimizedPromptPath = filepath.Join(filepath.Dir(c.DB.Path), "extraction-prompt-optimized.md")
 		} else {
-			q.OptimizedPromptPath = "extraction-prompt-optimized.md"
+			q.OptimizedPromptPath = "prompts/extraction-prompt-optimized.md"
 		}
 	}
 	return q
