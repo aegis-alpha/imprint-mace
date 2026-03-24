@@ -32,6 +32,10 @@ archive/
 research/
 prompts/session-*
 
+# Eval data and output (LoCoMo dataset, benchmark results)
+/data/
+/output/
+
 # Test data (golden eval set, generated scripts)
 /testdata/
 tools/scripts/convert-dialogre.py
@@ -50,3 +54,8 @@ research/benchmarks/test-data-large.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Understand-Anything plugin (dev tool, not part of Imprint)
+.cursor-plugin/
+understand-anything-plugin/
+.understand-anything/

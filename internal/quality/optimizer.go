@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -169,6 +170,7 @@ func (o *LoopOptimizer) Optimize(ctx context.Context) *OptimizeResult {
 			"baseline", baselineScore, "candidate", candidateScore,
 			"path", o.optimizedPath)
 		o.resetFailures()
+		o.execOnKept(result)
 	} else {
 		result.Kept = false
 		o.logger.Info("optimization: candidate discarded",
@@ -269,6 +271,26 @@ func (o *LoopOptimizer) resetFailures() {
 	defer o.mu.Unlock()
 	o.consecFailures = 0
 	o.pauseUntil = time.Time{}
+}
+
+func (o *LoopOptimizer) execOnKept(result *OptimizeResult) {
+	cmd := o.cfg.OnKeptCommand
+	if cmd == "" {
+		return
+	}
+	go func() {
+		args := strings.Fields(cmd)
+		c := exec.CommandContext(context.Background(), args[0], args[1:]...) //nolint:gosec // configurable by operator
+		c.Env = append(os.Environ(),
+			fmt.Sprintf("IMPRINT_KEPT_SCORE=%.4f", result.CandidateScore),
+			fmt.Sprintf("IMPRINT_BASELINE_SCORE=%.4f", result.BaselineScore),
+		)
+		if out, err := c.CombinedOutput(); err != nil {
+			o.logger.Warn("on_kept_command failed", "cmd", cmd, "error", err, "output", string(out))
+		} else {
+			o.logger.Info("on_kept_command completed", "cmd", cmd)
+		}
+	}()
 }
 
 func (o *LoopOptimizer) recordAttempt(ctx context.Context, result *OptimizeResult) {

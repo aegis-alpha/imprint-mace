@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
@@ -164,6 +165,7 @@ type QualityConfig struct {
 	OptimizedPromptPath  string  `toml:"optimized_prompt_path"`
 	MutationPromptPath   string  `toml:"mutation_prompt_path"`
 	GoldenDir            string  `toml:"golden_dir"`
+	OnKeptCommand        string  `toml:"on_kept_command"`
 }
 
 func (c *Config) EffectiveQualityConfig() QualityConfig {
@@ -184,11 +186,19 @@ func (c *Config) EffectiveQualityConfig() QualityConfig {
 	if q.DecayHalfLifeDays == 0 {
 		q.DecayHalfLifeDays = 14
 	}
-	if q.OptimizedPromptPath == "" {
-		q.OptimizedPromptPath = "prompts/extraction-prompt-optimized.md"
-	}
 	if q.MutationPromptPath == "" {
-		q.MutationPromptPath = "prompts/mutation-prompt.md"
+		if c.Prompts.Extraction != "" {
+			q.MutationPromptPath = filepath.Join(filepath.Dir(c.Prompts.Extraction), "mutation-prompt.md")
+		} else {
+			q.MutationPromptPath = "prompts/mutation-prompt.md"
+		}
+	}
+	if q.OptimizedPromptPath == "" {
+		if c.DB.Path != "" {
+			q.OptimizedPromptPath = filepath.Join(filepath.Dir(c.DB.Path), "extraction-prompt-optimized.md")
+		} else {
+			q.OptimizedPromptPath = "extraction-prompt-optimized.md"
+		}
 	}
 	return q
 }

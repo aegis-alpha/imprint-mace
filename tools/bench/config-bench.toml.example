@@ -1,0 +1,70 @@
+# Imprint benchmark instance configuration.
+# Identical to production config except:
+#   - db.path points to a temporary/separate database
+#   - api.port is 8181 (production uses 8080)
+#   - watcher and openclaw sections disabled
+#
+# Copy and fill in API keys:
+#   cp config-bench.toml.example config-bench.toml
+
+[db]
+path = "/tmp/imprint-bench.db"
+
+[api]
+host = "127.0.0.1"
+port = 8181
+
+[embedding]
+dimensions = 1536
+distance_metric = "cosine"
+
+[[providers.embedding]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "text-embedding-3-small"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 15
+priority = 1
+
+# Use the same extraction providers as production.
+# The benchmark measures how well THIS config extracts and retrieves.
+
+[[providers.extraction]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 120
+priority = 1
+
+[[providers.extraction]]
+name = "anthropic"
+base_url = "https://api.anthropic.com"
+model = "claude-haiku-4-5"
+api_key_env = "ANTHROPIC_API_KEY"
+timeout_seconds = 120
+priority = 2
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt-5-nano"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 120
+priority = 3
+
+[[providers.consolidation]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 60
+priority = 1
+
+[[providers.query]]
+name = "google"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "gemini-2.5-flash-lite"
+api_key_env = "GOOGLE_API_KEY"
+timeout_seconds = 30
+priority = 1

@@ -372,6 +372,27 @@ When signals accumulate past a threshold, an LLM review proposes taxonomy change
 
 The entire cycle is autonomous. No human intervention needed, though all proposals and their outcomes are logged for review. All proposal types (add, remove, merge, rename) are fully validated.
 
+## Self-Tuning Quality
+
+Imprint monitors its own extraction quality and automatically optimizes the extraction prompt.
+
+**Quality signals** are computed from production data after every ingest batch -- no extra LLM calls, just SQL queries:
+
+- **Supersede rate** per fact type -- how often facts get replaced (high rate = extraction is unstable)
+- **Confidence calibration** -- are confidence scores accurate or inflated?
+- **Entity collision rate** -- how often new entities collide with existing ones during dedup
+
+When signals exceed thresholds, the **Karpathy loop** kicks in:
+
+1. Send the current extraction prompt + signal summary to an LLM
+2. LLM produces a candidate prompt
+3. Run the candidate against the golden eval dataset
+4. If composite score improves -- keep; otherwise discard
+
+The original prompt is never modified. Rate-limited to 1 attempt per hour; 3 consecutive failures pause for 24 hours. Cost: ~$0.004 per attempt.
+
+Run manually: `imprint optimize`. Runs automatically after `ingest-dir`, `watch`, and `serve` when signals warrant it.
+
 ## Project Status
 
 ### What works
