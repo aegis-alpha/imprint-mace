@@ -132,7 +132,19 @@ func (e *Extractor) Extract(ctx context.Context, text string, sourceFile string)
 	}
 
 	duration := time.Since(start)
-	content := stripMarkdownFences(resp.Content)
+	content := extractJSON(stripMarkdownFences(resp.Content))
+
+	if len(content) == 0 || (content[0] != '{' && content[0] != '[') {
+		e.logger.Info("extraction returned non-JSON response, treating as empty",
+			"source", sourceFile,
+			"provider", resp.ProviderName,
+			"model", resp.Model,
+			"prefix", content[:min(80, len(content))],
+		)
+		e.writeLog(ctx, resp.ProviderName, resp.Model, len(text), resp.TokensUsed,
+			duration.Milliseconds(), true, 0, 0, 0, "", "")
+		return &model.ExtractionResult{}, nil
+	}
 
 	var raw rawExtractionResult
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
@@ -251,14 +263,37 @@ func (e *Extractor) hydrate(raw rawExtractionResult, sourceFile string, now time
 }
 
 // stripMarkdownFences removes ```json ... ``` wrapping that some LLMs add
-// despite being told not to.
+// despite being told not to. Handles double fences, missing language tags,
+// trailing whitespace, and fences without newlines.
 func stripMarkdownFences(s string) string {
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```") {
+	for strings.HasPrefix(s, "```") {
 		if idx := strings.Index(s, "\n"); idx != -1 {
 			s = s[idx+1:]
+		} else {
+			s = strings.TrimPrefix(s, "```")
+			s = strings.TrimPrefix(s, "json")
 		}
+		s = strings.TrimSpace(s)
 	}
-	s = strings.TrimSuffix(s, "```")
+	for strings.HasSuffix(s, "```") {
+		s = strings.TrimSuffix(s, "```")
+		s = strings.TrimSpace(s)
+	}
 	return strings.TrimSpace(s)
+}
+
+// extractJSON finds the first JSON object in a string that may contain
+// surrounding text (e.g. "Here is the extraction:\n{...}").
+func extractJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
+		return s
+	}
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return s
 }

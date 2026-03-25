@@ -139,16 +139,19 @@ func TestExtract_HandlesEmptyResult(t *testing.T) {
 	}
 }
 
-func TestExtract_HandlesInvalidJSON(t *testing.T) {
+func TestExtract_HandlesNonJSON(t *testing.T) {
 	e := testExtractor(t, &provider.Response{
 		Content:      "this is not json at all",
 		ProviderName: "mock",
 		Model:        "test-model",
 	}, nil)
 
-	_, err := e.Extract(context.Background(), "some text", "test.md")
-	if err == nil {
-		t.Fatal("expected error for invalid JSON")
+	result, err := e.Extract(context.Background(), "some text", "test.md")
+	if err != nil {
+		t.Fatalf("expected no error for non-JSON response, got %v", err)
+	}
+	if len(result.Facts) != 0 {
+		t.Errorf("expected 0 facts, got %d", len(result.Facts))
 	}
 }
 
@@ -301,7 +304,7 @@ func TestExtract_LogsParseError(t *testing.T) {
 	defer store.Close()
 
 	e := testExtractorWithLog(t, store, &provider.Response{
-		Content:      "not json",
+		Content:      `{"facts": broken}`,
 		ProviderName: "mock",
 		Model:        "test-model",
 		TokensUsed:   50,
@@ -352,5 +355,128 @@ func TestExtract_LogsProviderError(t *testing.T) {
 	}
 	if !strings.Contains(l.ErrorMessage, "timeout") {
 		t.Errorf("expected error message to contain 'timeout', got %q", l.ErrorMessage)
+	}
+}
+
+// --- stripMarkdownFences tests (BVP-336) ---
+
+func TestStripMarkdownFences_Simple(t *testing.T) {
+	input := "```json\n" + validJSON + "\n```"
+	got := stripMarkdownFences(input)
+	if got != validJSON {
+		t.Errorf("expected clean JSON, got %q", got)
+	}
+}
+
+func TestStripMarkdownFences_NoLanguageTag(t *testing.T) {
+	input := "```\n" + validJSON + "\n```"
+	got := stripMarkdownFences(input)
+	if got != validJSON {
+		t.Errorf("expected clean JSON, got %q", got)
+	}
+}
+
+func TestStripMarkdownFences_NoNewline(t *testing.T) {
+	input := "```json" + `{"facts":[],"entities":[],"relationships":[]}` + "```"
+	got := stripMarkdownFences(input)
+	if got != `{"facts":[],"entities":[],"relationships":[]}` {
+		t.Errorf("expected clean JSON, got %q", got)
+	}
+}
+
+func TestStripMarkdownFences_DoubleFences(t *testing.T) {
+	input := "```\n```json\n" + validJSON + "\n```\n```"
+	got := stripMarkdownFences(input)
+	if got != validJSON {
+		t.Errorf("expected clean JSON, got %q", got)
+	}
+}
+
+func TestStripMarkdownFences_TrailingSpace(t *testing.T) {
+	input := "```json\n" + validJSON + "\n```   \n"
+	got := stripMarkdownFences(input)
+	if got != validJSON {
+		t.Errorf("expected clean JSON, got %q", got)
+	}
+}
+
+// --- extractJSON tests (BVP-336) ---
+
+func TestExtractJSON_CleanJSON(t *testing.T) {
+	got := extractJSON(validJSON)
+	if got != validJSON {
+		t.Errorf("expected passthrough, got %q", got)
+	}
+}
+
+func TestExtractJSON_TextBeforeJSON(t *testing.T) {
+	input := "Here is the extraction:\n" + `{"facts":[],"entities":[],"relationships":[]}`
+	got := extractJSON(input)
+	if got != `{"facts":[],"entities":[],"relationships":[]}` {
+		t.Errorf("expected extracted JSON, got %q", got)
+	}
+}
+
+func TestExtractJSON_NoJSON(t *testing.T) {
+	input := "I don't see any extractable information in this text."
+	got := extractJSON(input)
+	if got != input {
+		t.Errorf("expected passthrough, got %q", got)
+	}
+}
+
+// --- integration tests: Extract with new pipeline (BVP-336) ---
+
+func TestExtract_TextRefusal(t *testing.T) {
+	e := testExtractor(t, &provider.Response{
+		Content:      "I don't see any extractable knowledge in this transcript.",
+		ProviderName: "mock",
+		Model:        "test-model",
+		TokensUsed:   20,
+	}, nil)
+
+	result, err := e.Extract(context.Background(), "some text", "test.md")
+	if err != nil {
+		t.Fatalf("expected no error for text refusal, got %v", err)
+	}
+	if len(result.Facts) != 0 || len(result.Entities) != 0 || len(result.Relationships) != 0 {
+		t.Errorf("expected empty result, got %d facts, %d entities, %d rels",
+			len(result.Facts), len(result.Entities), len(result.Relationships))
+	}
+}
+
+func TestExtract_MarkdownFences(t *testing.T) {
+	e := testExtractor(t, &provider.Response{
+		Content:      "```json\n" + validJSON + "\n```",
+		ProviderName: "mock",
+		Model:        "test-model",
+		TokensUsed:   100,
+	}, nil)
+
+	result, err := e.Extract(context.Background(), "some text", "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Facts) != 2 {
+		t.Errorf("expected 2 facts, got %d", len(result.Facts))
+	}
+}
+
+func TestExtract_EmbeddedJSON(t *testing.T) {
+	embedded := "Here is the extraction:\n" +
+		`{"facts": [], "entities": [], "relationships": []}`
+	e := testExtractor(t, &provider.Response{
+		Content:      embedded,
+		ProviderName: "mock",
+		Model:        "test-model",
+		TokensUsed:   30,
+	}, nil)
+
+	result, err := e.Extract(context.Background(), "some text", "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Facts) != 0 {
+		t.Errorf("expected 0 facts, got %d", len(result.Facts))
 	}
 }

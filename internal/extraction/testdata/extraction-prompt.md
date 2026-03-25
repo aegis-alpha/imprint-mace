@@ -290,3 +290,10 @@ Alice: alright, back. Where were we?
 ```json
 {"facts": [], "entities": [], "relationships": []}
 ```
+
+## Critical: JSON Only
+
+You MUST return valid JSON. No markdown fences. No explanation. No commentary.
+If the input contains no extractable knowledge, return exactly:
+{"facts": [], "entities": [], "relationships": []}
+Do NOT respond with text like "I don't see any extractable information" -- return the empty JSON object instead.
