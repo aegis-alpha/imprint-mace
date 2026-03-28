@@ -92,6 +92,46 @@ Imprint watches transcript files, extracts facts, entities, and relationships, d
 - **Taxonomy evolution (background):** signals from extraction log -> LLM review -> validated proposals -> auto-apply
 - **Query:** question -> 5 parallel retrieval layers (vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph traversal) -> RRF merge -> ReadContext enrichment from disk -> LLM synthesis -> answer with citations
 
+## Self-Improving Architecture
+
+Imprint doesn't just store knowledge -- it has six closed-loop mechanisms that make it better over time without human intervention.
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │              Extraction Prompt               │
+                    │         (rendered from taxonomy)             │
+                    └──────────┬──────────────────────┬───────────┘
+                               │                      │
+                    ┌──────────▼──────────┐  ┌────────▼──────────┐
+                    │  Taxonomy Evolution  │  │   Karpathy Loop   │
+                    │  signals -> LLM     │  │  mutate -> eval   │
+                    │  review -> apply    │  │  -> gate -> save  │
+                    └──────────┬──────────┘  └────────┬──────────┘
+                               │                      │
+                    ┌──────────▼──────────────────────▼───────────┐
+                    │            Quality Signals                   │
+                    │  supersede rate, confidence, collisions,     │
+                    │  citations, extraction log                   │
+                    └──────────┬──────────────────────┬───────────┘
+                               │                      │
+                    ┌──────────▼──────────┐  ┌────────▼──────────┐
+                    │   Consolidation     │  │  Provider Healing  │
+                    │  cluster -> LLM     │  │  classify -> skip  │
+                    │  -> insights        │  │  -> retry -> sub   │
+                    └─────────────────────┘  └────────────────────┘
+```
+
+| Mechanism | What it does | How it closes the loop |
+|-----------|-------------|----------------------|
+| **Taxonomy Evolution** | Detects when the type system doesn't fit the data (custom types appearing, configured types unused, low confidence). LLM proposes add/remove/merge/rename. Validated proposals auto-apply. | Extraction signals -> proposals -> applied -> updated prompt -> different extraction behavior |
+| **Karpathy Loop** | Automatically mutates the extraction prompt, evaluates against a golden dataset, keeps improvements, discards regressions. Rate-limited (1/hour, 24h pause after 3 failures). | Quality signals -> prompt mutation -> eval gate -> better prompt -> better extraction |
+| **Quality Signals** | Computes production metrics from real data: supersede rate per fact type, confidence calibration, entity collision rate, fact citation frequency. | Feeds both Taxonomy Evolution and Karpathy Loop with data-driven improvement signals |
+| **Consolidation** | Pre-clusters facts by embedding similarity, then LLM discovers connections (supports, contradicts, elaborates, caused_by, supersedes, precedes) and generates higher-order insights. | Raw facts -> clustered groups -> connections + insights -> richer knowledge graph |
+| **Auto-Healing Providers** | Classifies errors (transient/auth/model_not_found), skips broken providers, retries after cooldown, substitutes models via prefix matching when configured model disappears. | Provider fails -> classify -> skip/retry -> find substitute -> resume extraction |
+| **Fact Dedup** | Embedding-based cosine similarity check before storing. Prevents the knowledge base from accumulating duplicates as the same topics are discussed across sessions. | New fact -> embed -> compare existing -> skip if duplicate -> clean KB |
+
+These mechanisms run autonomously. No configuration changes needed -- they activate based on data volume thresholds and quality signal patterns.
+
 ## Quick Start
 
 ### Build from source
