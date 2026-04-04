@@ -35,6 +35,8 @@ Extract facts, entities, and relationships from text.
   "facts_count": 2,
   "entities_count": 2,
   "relationships_count": 1,
+  "entity_collisions": 1,
+  "entity_creations": 1,
   "fact_ids": ["01JFA..."],
   "entity_ids": ["01JFB..."],
   "relationship_ids": ["01JFC..."]
@@ -97,7 +99,7 @@ Database statistics, wrapped with version info.
     "embedder_available_pct": 100
   },
   "eval_scores": {
-    "extraction": {"score": 0.72, "examples": 42, "date": "2026-03-20T09:00:00Z"},
+    "extraction": {"score": 0.72, "examples": 38, "date": "2026-03-20T09:00:00Z"},
     "retrieval": {"score": 0.85, "score2": 0.91, "examples": 21, "date": "2026-03-20T09:05:00Z"}
   },
   "providers": [
@@ -349,6 +351,8 @@ Ask a question against the knowledge base.
 
 Returns JSON with `answer`, `citations`, and `facts_consulted`.
 
+**Note:** The LLM also returns `confidence` and `notes` fields, but these are parsed and discarded by `parseResponse` -- they do not appear in the response. See ARCHITECTURE.md section 2.4.
+
 ### imprint_status
 
 Show knowledge base statistics. No parameters.
@@ -413,6 +417,33 @@ Replace a fact with updated content. Old fact is marked as superseded; new fact 
 | `source` | string | no | Source identifier (default: `"mcp"`) |
 
 Returns JSON with the new fact.
+
+### Conditional Registration
+
+Not all tools and resources are registered unconditionally:
+
+- `imprint_query` is registered only when a `Querier` is configured (i.e. `querier != nil`). Without query providers, the tool is absent from the MCP tool list.
+- MCP Resources (below) are registered only when a context `Builder` is configured (i.e. `builder != nil`).
+
+### MCP Resources
+
+When a context builder is configured, the MCP server exposes read-only resources for context retrieval without LLM synthesis.
+
+**Static resources:**
+
+| URI | Name | Description |
+|-----|------|-------------|
+| `imprint://context/relevant` | Relevant Context | Relevant facts, preferences, and recent knowledge |
+| `imprint://context/preferences` | User Preferences | All stored user preferences |
+| `imprint://context/recent` | Recent Facts | Facts created in the last 24 hours |
+
+**Resource templates:**
+
+| URI Template | Name | Description |
+|--------------|------|-------------|
+| `imprint://context/entities/{name}` | Entity Context | Context about a specific entity (subgraph, related facts) |
+
+All resources return `text/plain` MIME type.
 
 ---
 

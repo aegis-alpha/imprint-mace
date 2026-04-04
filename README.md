@@ -17,7 +17,7 @@
 Memory And Context Engine (MACE) for AI agents. Imprint turns conversations into a structured knowledge graph and uses it to form the agent's working context -- what it knows, what was decided, what matters right now. Cursor, Claude Code, any MCP client. Single Go binary, single SQLite file.
 
 > **Status: Experimental (see badge for version)**
-> Imprint is functional and deployed, but the API, MCP tools, config format, and database schema may change between versions. 369 tests pass, dual-layer memory works for OpenClaw, but multi-platform integration and production hardening are in progress. Feedback and contributions welcome.
+> Imprint is functional and deployed, but the API, MCP tools, config format, and database schema may change between versions. 405 tests pass, dual-layer memory works for OpenClaw, but multi-platform integration and production hardening are in progress. Feedback and contributions welcome.
 
 
 ## The Problem
@@ -77,6 +77,8 @@ Imprint watches transcript files, extracts facts, entities, and relationships, d
          │  extraction_log  │
          └──────────────────┘
 ```
+
+*Note: the diagram is simplified -- FTS5 is shown once but the code runs two separate FTS5 layers (facts + chunks).*
 
 **Library-first.** The core is a set of Go functions -- `ingest`, `query`, `consolidate`, `status`. Transport wrappers (HTTP API, MCP server, CLI) are thin layers on top. You can embed Imprint directly in your Go application or run it as a standalone service.
 
@@ -264,6 +266,7 @@ Imprint includes an MCP server for integration with Cursor, Claude Code, and oth
 | `imprint_query` | Ask a question against the knowledge base, get answer with citations |
 | `imprint_status` | Show knowledge base statistics |
 | `imprint_entities` | List entities, optionally filtered by type |
+| `imprint_relationships` | List relationships, optionally filtered by type or entity |
 | `imprint_graph` | Get the subgraph around an entity |
 | `imprint_update_fact` | Update metadata on an existing fact (confidence, expiry, subject) |
 | `imprint_supersede_fact` | Replace a fact with updated content, marking the old one as superseded |
@@ -406,7 +409,6 @@ The system collects signals about its own type system during normal operation --
 - **Custom frequency:** an unnamed type keeps appearing in extractions
 - **Type unused:** a defined type is never matched
 - **Low confidence:** extractions consistently score low confidence for a type
-- **Type overlap:** two types are used interchangeably
 
 When signals accumulate past a threshold, an LLM review proposes taxonomy changes (add, remove, merge, rename). Proposals are validated in shadow mode -- the system runs sample extractions with the proposed taxonomy and compares results against the current one. If validation passes, the change is auto-applied. If it fails, the proposal is rejected with a reason.
 
@@ -419,8 +421,11 @@ Imprint monitors its own extraction quality and automatically optimizes the extr
 **Quality signals** are computed from production data after every ingest batch -- no extra LLM calls, just SQL queries:
 
 - **Supersede rate** per fact type -- how often facts get replaced (high rate = extraction is unstable)
-- **Confidence calibration** -- are confidence scores accurate or inflated?
+- **Citation rate** per fact type -- how often facts are cited in queries (low rate = extraction produces unused facts)
+- **Volume anomaly** -- unusual spikes or drops in extraction volume
 - **Entity collision rate** -- how often new entities collide with existing ones during dedup
+- **Confidence calibration** -- are confidence scores accurate or inflated?
+- **Confidence-citation calibration** -- do high-confidence facts get cited more often?
 
 When signals exceed thresholds, the **Karpathy loop** kicks in:
 
@@ -441,13 +446,13 @@ Run manually: `imprint optimize`. Runs automatically after `ingest-dir`, `watch`
 - **Hybrid query:** 5 parallel retrieval layers (vector, FTS5, graph), RRF merge, ReadContext enrichment from source files, LLM synthesis with citations
 - **Self-evolving taxonomy:** signal collection from extraction results, LLM review, validated proposals, auto-apply -- fully autonomous
 - **Dual-layer memory:** realtime ingest via hooks/API (temporary, session-scoped) + batch ingest from transcript files (permanent, with source references). Session-boundary supersede.
-- **Platform integrations:** deterministic hooks for OpenClaw, Cursor, Claude Code, Gemini CLI. MCP server (7 tools) for any MCP client. HTTP API (9 endpoints).
+- **Platform integrations:** deterministic hooks for OpenClaw, Cursor, Claude Code, Gemini CLI. MCP server (8 tools) for any MCP client. HTTP API (9 main + 3 admin endpoints).
 - **Consolidation:** background grouping of related facts, connection discovery, higher-order insights
 - **Transcript-first storage:** files on disk are the source of truth, DB is a derived index with back-references to file + line range
 - **Self-editing memory:** agents can update fact metadata or supersede facts with corrected content via MCP tools or HTTP API
 - **Eval harness:** extraction eval (CaRB-style P/R/F1, NRR, ECE, composite score) + retrieval eval (Recall@10, MRR, per-layer contribution, graceful degradation delta). Built-in golden datasets for both.
-- **Self-tuning quality:** quality signal collection (supersede rate, confidence drift, entity collision rate), Karpathy loop for automatic prompt optimization, query_log instrumentation
-- **15 CLI subcommands**, 369 tests, Docker deployment with Watchtower auto-update
+- **Self-tuning quality:** 6 quality signal collectors (supersede rate, citation rate, volume anomaly, entity collision rate, confidence calibration, confidence-citation calibration), Karpathy loop for automatic prompt optimization, query_log instrumentation
+- **17 CLI subcommands**, 405 tests, Docker deployment with Watchtower auto-update
 
 ## Benchmarks
 

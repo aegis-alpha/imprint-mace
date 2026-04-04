@@ -16,7 +16,7 @@ All text enters the system through `Engine.Ingest()`. There are three paths to r
 
 `internal/ingest.BatchAdapter` processes a directory of `.txt` and `.md` files.
 
-1. **Discover files.** Walk the directory, select `.txt` and `.md` files.
+1. **Discover files.** Read the directory (flat, non-recursive), select `.txt` and `.md` files. Subdirectories are skipped.
 2. **Parse frontmatter.** If the file starts with `---\n`, extract YAML frontmatter (source, session, date, participants, topic). See `spec/TRANSCRIPT-FORMAT.md`.
 3. **Dedup.** Compute SHA-256 of the file content. Compare against `ingested_files` table. If the hash matches, skip.
 4. **Register transcript.** Create or update a `transcripts` row with metadata from frontmatter. On re-ingest, delete old `transcript_chunks` first.
@@ -28,6 +28,8 @@ All text enters the system through `Engine.Ingest()`. There are three paths to r
 ### 1.2 Realtime Ingest
 
 Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). No chunking, no dedup, no transcript registration -- the text goes directly to `Engine.Ingest()`.
+
+**Note:** The HTTP `POST /ingest` endpoint accepts only `text` and `source` fields. The `WithSessionID` ingest option exists in the Engine but is not exposed via the HTTP handler -- it is only reachable through direct Engine calls (e.g. from hooks).
 
 **Performance note:** Each `Engine.Ingest()` call triggers one LLM extraction (2-10 seconds depending on text length and provider). For bulk operations, callers should process items sequentially with retry and backoff, not in parallel. Concurrent LLM calls risk rate limits and timeouts.
 
@@ -55,7 +57,7 @@ Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). N
 `internal/extraction.Extractor` converts text to structured data.
 
 - The system prompt is a Go template (`prompts/extraction-prompt.md`) rendered at startup with the current type taxonomy from config. When the taxonomy changes, the prompt updates on the next restart.
-- The LLM returns JSON with arrays of facts, entities, and relationships. Each fact has a type, subject, content, confidence, and optional temporal validity.
+- The LLM returns JSON with arrays of facts, entities, and relationships. Each fact has a type, subject, content, confidence, and optional temporal validity. The response is parsed through a robust fallback chain: `stripMarkdownFences` removes `` ```json ... ``` `` wrapping, `extractJSON` locates the first `{...}` object in surrounding text, and a text refusal detector catches non-JSON responses (e.g. "I cannot extract..."). This handles providers that wrap JSON in markdown fences or prepend conversational text.
 - The `Extractor` hydrates the raw LLM output: generates ULID IDs, sets timestamps, attaches source info.
 - Every extraction call is logged to `extraction_log` (provider, model, tokens, duration, counts, errors) via `ExtractionLogger`.
 
@@ -77,6 +79,51 @@ Realtime and batch ingest coexist for the same session. Realtime facts are fast 
 
 **Design constraint:** Cosine similarity is not used for cross-path supersede. Simulation (D002) showed a 73% miss rate due to granularity drift between realtime single-message facts and batch multi-message chunk facts. Session-boundary supersede is deterministic and reliable.
 
+### 1.7 Hot-Cool-Cold Pipeline (D31-D35)
+
+**Status: Designed, not yet implemented.** Replaces per-message extraction (28% capture rate) with streaming storage + delayed topic-scoped extraction.
+
+Core insight: the original problem framing ("how to extract from a stream") was wrong. The right framing: "how to make raw messages queryable immediately, and extract with full context later."
+
+```
+Message arrives (from hook/API)
+    |
+    v
+[HOT PHASE] -- raw store, TTL ~1h, zero LLM cost
+    |  1. Store raw message (speaker, content, timestamp, platform metadata)
+    |  2. Selective embed (messages >= 50 chars get embedding)
+    |  3. FTS5 index
+    |  4. Queryable immediately via FTS5 + embed
+    |
+    | (TTL expires, message copied to cooldown)
+    v
+[COOL PHASE] -- topic clustering + extraction
+    |  1. Messages accumulate in cooldown_messages table
+    |  2. Hybrid Union topic segmentation (TreeSeg + TT+Merge, D32)
+    |  3. Cluster readiness: topic silence (8h) or cluster size (50 msgs)
+    |  4. Ready cluster -> format as 0GMem-style annotated block (D33)
+    |  5. Extraction LLM call with full topic context
+    |  6. Results -> Engine.Ingest() -> cold phase
+    |
+    v
+[COLD PHASE] -- permanent store (existing infrastructure)
+    Facts + Entities + Relationships
+    Transcripts on disk
+    Consolidation, Karpathy loop, 5-layer retrieval
+```
+
+**Two tables (D35):** `hot_messages` (raw, fast for realtime query) and `cooldown_messages` (same base + cluster_id, transcript linking, processing status). Separate tables prevent SQLite single-writer contention between realtime query and background processing.
+
+**Topic segmentation (D32):** Hybrid Union algorithm (TreeSeg + TT+Merge, boundary union). Determines WHEN to extract (cluster readiness) and WHICH messages form a block. Does NOT reorder messages -- extraction receives chronological order. Experiment showed topic-based reordering adds no extraction quality.
+
+**Annotation format (D33):** `[N] [Speaker] (date) (time) (->ref): content`. Linker (->ref) connects confirmations ("yes") to the specific proposal they confirm. Known facts NOT included in extraction prompt (paradoxical priming effect measured in E020).
+
+**Triggers (D34):** Topic silence (8 hours, configurable) + cluster size (50 messages, safety valve). Session end rejected -- technical event, not semantic.
+
+**Query path:** Three-phase search. Hot (FTS5 + embed over raw messages, freshest data), Cool (annotated messages not yet extracted), Cold (structured facts, existing 5-layer pipeline). Results merged via RRF, LLM synthesis handles mixed formats.
+
+**Platforms without hooks:** Transcript files go directly to cool phase via file watcher. No hot phase. Same extraction pipeline.
+
 ### 1.6 Embedding
 
 `internal/provider.EmbedderChain` generates vector embeddings for fact content.
@@ -94,13 +141,14 @@ Realtime and batch ingest coexist for the same session. Realtime facts are fast 
 
 ### 2.1 Retrieval Layers
 
-Four layers run concurrently:
+Five layers run concurrently:
 
 | Layer | Source | Method | Limit |
 |-------|--------|--------|-------|
 | Vector facts | `facts_vec` | KNN cosine search on question embedding | 20 |
 | Vector chunks | `chunks_vec` | KNN cosine search on question embedding | 10 |
-| FTS5 | `facts_fts` | BM25 keyword search on sanitized question | 10 |
+| FTS5 facts | `facts_fts` | BM25 keyword search on sanitized question | 10 |
+| FTS5 chunks | `transcript_chunks_fts` | BM25 keyword search on sanitized question | 10 |
 | Graph | `entities` + `relationships` | Word-match entity lookup, 1-hop traversal, collect source facts | unbounded |
 
 Vector layers are skipped when no embedder is configured (graceful degradation to FTS5 + graph).
@@ -127,7 +175,7 @@ The system builds a prompt with three sections:
 2. **Facts** -- ranked facts with ID, type, confidence, date, subject, content.
 3. **Transcript Context** -- raw lines from disk for facts that have source references.
 
-The LLM returns JSON with an answer, citations (fact IDs and/or consolidation IDs), a confidence score, and optional notes about contradictions or gaps.
+The LLM returns JSON with an answer, citations (fact IDs and/or consolidation IDs), a confidence score, and optional notes about contradictions or gaps. The `rawQueryResponse` struct parses all four fields, but `parseResponse` only passes `answer` and `citations` into `QueryResult` -- the `confidence` and `notes` fields are parsed and discarded.
 
 ---
 
@@ -137,22 +185,25 @@ The LLM returns JSON with an answer, citations (fact IDs and/or consolidation ID
 
 ### 3.1 Consolidator
 
-`Consolidator.Consolidate(ctx, limit)`:
+`Consolidator.Consolidate(ctx, limit)` returns `[]ConsolidateResult`:
 
-1. Fetch unconsolidated facts from the DB. A fact is unconsolidated if its ID does not appear in any consolidation's `source_fact_ids` array (checked via `json_each`).
+1. Fetch unconsolidated facts from the DB (up to `limit`). A fact is unconsolidated if its ID does not appear in any consolidation's `source_fact_ids` array (checked via `json_each`).
 2. If fewer than 2 facts, skip.
-3. Format facts as a list (`[ID] (type) subject: content`) and send to the LLM with the consolidation prompt template.
-4. The LLM returns JSON: connections (fact_a, fact_b, connection_type, strength), a summary, an insight, and an importance score.
-5. Store a `Consolidation` record (source fact IDs, summary, insight, importance).
-6. Store `FactConnection` records for each connection.
+3. **Pre-cluster** facts via `clusterFacts()` (see below). Each cluster is consolidated separately.
+4. For each cluster: format facts as a list (`[ID] (type) subject: content`) and send to the LLM with the consolidation prompt template.
+5. The LLM returns JSON: connections (fact_a, fact_b, connection_type, strength), a summary, an insight, and an importance score.
+6. Store a `Consolidation` record per cluster (source fact IDs, summary, insight, importance).
+7. Store `FactConnection` records for each connection.
 
 Connection types: `supports`, `contradicts`, `elaborates`, `caused_by`, `supersedes`, `precedes`.
+
+**Pre-clustering (`clusterFacts`):** Groups facts by embedding cosine similarity (configurable threshold via `cluster_similarity_threshold`, default 0.40). Facts without embeddings fall back to case-insensitive subject grouping. Remaining ungrouped facts go into a miscellaneous cluster. Clusters with fewer than 2 facts are dropped.
 
 ### 3.2 Scheduler
 
 `Scheduler` runs consolidation in a background loop:
 
-1. Tick at a configurable interval (default: 60 minutes).
+1. Tick at a configurable interval (set by the caller, e.g. `main.go`).
 2. On each tick, count unconsolidated facts.
 3. If count >= `min_facts` threshold, run `Consolidator.Consolidate()` with `max_group_size` as the limit.
 4. Graceful shutdown via context cancellation.
@@ -197,14 +248,14 @@ trigger when: SUM(signal.count) >= threshold
 
 ### 4.4 Validation
 
-`Evolver.ValidateProposals()` runs post-hoc SQL validation on proposed changes:
+`Evolver.ValidateProposals()` runs automated validation on proposed changes:
 
 | Action | Validation | Result |
 |--------|-----------|--------|
 | `add` | custom_frequency signal exists with count >= 1 | `validated` |
 | `remove` | Type has 0 facts AND total facts >= 100 | `validated` |
-| `merge` | Requires manual review | stays `proposed` |
-| `rename` | Requires manual review | stays `proposed` |
+| `merge` | Embedding centroid pre-filter (cosine >= 0.7 between source and target type centroids). Below threshold = rejected. Above threshold = LLM confirmation with sample facts from both types. | `validated` or `rejected` |
+| `rename` | LLM confirmation with sample facts of the type. LLM evaluates whether the new name better describes the existing facts. | `validated` or `rejected` |
 
 Validated proposals can be applied (status -> `applied`). Rejected proposals are marked with a reason.
 
@@ -214,6 +265,8 @@ Validated proposals can be applied (status -> `applied`). Rejected proposals are
 
 - `add` proposals append new `TypeDef` entries.
 - `remove` proposals filter out matching entries.
+- `merge` proposals remove the source type (the merged-from type disappears from the taxonomy).
+- `rename` proposals rename the type in-place (parses `rename_to` from the proposal's definition JSON).
 
 The merged result is the runtime taxonomy used by extraction prompts. This closes the loop: signals from extraction -> proposals -> applied changes -> updated prompts -> different extraction behavior.
 
@@ -263,7 +316,7 @@ CREATE VIRTUAL TABLE facts_fts USING fts5(content, fact_id UNINDEXED);
 **Transcripts (migration 005):**
 
 ```sql
-transcripts (id, file_path, date, participants, topic, chunk_count, created_at)
+transcripts (id, file_path TEXT NOT NULL UNIQUE, date, participants, topic, chunk_count, created_at)
 transcript_chunks (id, transcript_id, line_start, line_end, content_hash, embedding_model)
 ```
 
@@ -314,7 +367,40 @@ provider_health (provider_name, task_type, configured_model, active_model, statu
     PRIMARY KEY (provider_name, task_type)
 ```
 
-Note: migrations 010a and 010b share the same number prefix due to a numbering collision between S045 and S048. Both are applied. The next migration should be 011.
+Note: migrations 010a and 010b share the same number prefix due to a numbering collision between S045 and S048. Both are applied.
+
+**Provider ops + retry queue (migration 011):**
+
+```sql
+provider_ops (provider_name, status, retry_count, max_retries, last_error,
+              error_type, next_check_at, last_success, created_at, updated_at)
+    PRIMARY KEY (provider_name)
+retry_queue (id, task_type, payload, created_at, retry_count, last_error, status)
+```
+
+**Eval runs baseline + git commit (migration 012):**
+
+```sql
+ALTER TABLE eval_runs ADD COLUMN git_commit TEXT;
+ALTER TABLE eval_runs ADD COLUMN is_baseline INTEGER NOT NULL DEFAULT 0;
+```
+
+**Hot-Cool Pipeline tables (migration 013, D35) -- not yet implemented:**
+
+```sql
+hot_messages (id, speaker, content, timestamp, platform, platform_session_id,
+              linker_ref, has_embedding, created_at)
+    -- FTS5 virtual table over content
+    -- vec0 table created programmatically (D23 pattern)
+
+cooldown_messages (id, speaker, content, timestamp, platform, platform_session_id,
+                   linker_ref, has_embedding, cluster_id, transcript_file,
+                   transcript_line, processed_at, moved_from_hot, created_at)
+    -- FTS5 virtual table over content
+    -- vec0 table created programmatically
+```
+
+Two separate tables for performance: hot = realtime query (agent waits), cool = background processing. Message ID (ULID) generated once in hot, preserved in cooldown. Selective embedding: has_embedding=1 only for messages >= 50 chars.
 
 ### 5.2 Vector Tables
 
@@ -376,7 +462,7 @@ The OpenAI-compatible provider covers OpenAI, Google Gemini, OpenRouter, Voyage 
 
 `Chain.Send()` tries providers in priority order (lower number = tried first). The first successful response is returned. If all fail, the last error is returned.
 
-Credentials are resolved per provider: `token_env` (OAuth/Bearer token) is tried first; if empty, falls back to `api_key_env` (API key).
+Credentials are resolved per provider: `token_env` (OAuth/Bearer token) is tried first; if empty, falls back to `api_key_env` (API key). **Exception:** Embedders (`newEmbedder`) only check `api_key_env`, skipping `token_env` entirely.
 
 ### 6.3 Task-Specific Chains
 
@@ -518,7 +604,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 |---------|---------|
 | `[db]` | Database path |
 | `[api]` | HTTP server host and port |
-| `[consolidation]` | Interval, min_facts threshold, max_group_size, dedup threshold |
+| `[consolidation]` | Interval, min_facts threshold, max_group_size, dedup threshold, cluster_similarity_threshold (default 0.40) |
 | `[embedding]` | Dimensions, distance metric |
 | `[watcher]` | Watch path, poll interval, debounce, consolidate-after-ingest flag |
 | `[prompts]` | Paths to extraction, consolidation, and query prompt templates |
@@ -535,7 +621,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 - `EffectiveAPIAddr()`: returns configured host:port, or `127.0.0.1:8080` if not set.
 - `EffectiveTypes()`: returns configured types, falling back to built-in defaults (12 fact, 9 entity, 9 relation, 6 connection types) for any empty category.
 - `EffectiveGCAfterDays()`: returns configured gc_after_days, or 30 if not set.
-- `EffectiveContextTTLDays()`: returns configured context_ttl_days, or 0 (disabled) if not set.
+- `EffectiveContextTTLDays()`: returns configured context_ttl_days, or 7 if not set.
 
 ---
 
@@ -564,7 +650,7 @@ The `export` command dumps the entire knowledge base for backup or analysis.
 
 ### 10.1 Golden Dataset
 
-`imprint eval generate` writes the built-in golden dataset to disk (default: `testdata/golden/`). The dataset contains 42 examples (30 positive, 12 noise) covering all 12 fact types, 9 entity types, 9 relationship types, and common noise patterns (cron output, stack traces, CI logs, meta-conversation, tool output).
+`imprint eval generate` writes the built-in golden dataset to disk (default: `testdata/golden/`). The dataset contains 38 examples covering all 12 fact types, 9 entity types, 9 relationship types, and common noise patterns (cron output, stack traces, CI logs, meta-conversation, tool output).
 
 Paired files in a directory: `001-foo.txt` (input) + `001-foo.json` (expected output). The JSON follows the same schema as `ExtractionResult` (facts, entities, relationships). Examples with all-empty arrays are noise examples. Users can add their own examples to the same directory for domain-specific evaluation.
 
@@ -630,8 +716,11 @@ The `Querier.Retrieve()` method runs the full retrieval pipeline (embed, paralle
 | Signal | What it measures |
 |--------|-----------------|
 | supersede_rate | Fraction of facts superseded per fact type |
-| confidence_mean | Average extraction confidence per fact type |
+| citation_rate | Fraction of facts cited in queries per fact type |
+| volume_anomaly | Unusual spikes or drops in extraction volume |
 | entity_collision_rate | Fraction of entity creations that were dedup collisions |
+| confidence_calibration | Calibration of extraction confidence scores vs actual quality |
+| confidence_citation_calibration | Calibration of confidence scores vs citation frequency |
 
 ### 11.2 Karpathy Loop (Prompt Optimization)
 
