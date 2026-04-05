@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - `UpdateFactEmbedding`, `UpdateChunkEmbedding`: vector index Add after DB update with descriptive errors
 - `newEmbedderChainOptional`: nil config guard to prevent panic
 - Release (goreleaser): set `CGO_CFLAGS=-I/usr/local/include` and full `CGO_LDFLAGS` with `-L/usr/local/lib` so cgo finds `usearch.h` (quoted `#include` in upstream binding; same as CI)
-- `.github/workflows/release.yml`: install `gcc`, `libsqlite3-dev`, then USearch `.deb` before goreleaser
+- `.github/workflows/release.yml`: install `gcc`, `libsqlite3-dev`, then USearch `.deb` before goreleaser (download to `/tmp` and remove so GoReleaser does not see a dirty git tree)
 - `.github/workflows/ci.yml`: add CGO_CFLAGS to all build steps, disable macOS tests (CGO pointer panics), disable lint temporarily
 
 ## [0.5.0] - 2026-04-05
