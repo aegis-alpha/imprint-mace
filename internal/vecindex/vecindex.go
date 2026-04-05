@@ -220,21 +220,31 @@ func (u *USearchIndex) SearchWithPrefix(vector []float32, k int, prefix string) 
 	if prefix == "" {
 		keys, dists, err = u.idx.Search(vector, uint(k))
 	} else {
-		allowed := make(map[usearch.Key]struct{})
-		for key, logical := range u.keyToID {
-			if strings.HasPrefix(logical, prefix) {
-				allowed[key] = struct{}{}
+		// FilteredSearch with closure causes CGO pointer panics in Go 1.21+
+		// Instead: search all, then filter results
+		allK := k * 3 // oversample to get enough prefix matches
+		if allK > 100 {
+			allK = 100
+		}
+		keys, dists, err = u.idx.Search(vector, uint(allK))
+		if err != nil {
+			return nil, err
+		}
+		// Filter to prefix matches
+		filtered := make([]usearch.Key, 0, k)
+		filteredDists := make([]float32, 0, k)
+		for i := range keys {
+			logical, ok := u.keyToID[keys[i]]
+			if ok && strings.HasPrefix(logical, prefix) {
+				filtered = append(filtered, keys[i])
+				filteredDists = append(filteredDists, dists[i])
+				if len(filtered) >= k {
+					break
+				}
 			}
 		}
-		h := &usearch.FilteredSearchHandler{
-			Callback: func(key usearch.Key, _ *usearch.FilteredSearchHandler) int {
-				if _, ok := allowed[key]; ok {
-					return 1
-				}
-				return 0
-			},
-		}
-		keys, dists, err = u.idx.FilteredSearch(vector, uint(k), h)
+		keys = filtered
+		dists = filteredDists
 	}
 	if err != nil {
 		return nil, err
@@ -245,9 +255,7 @@ func (u *USearchIndex) SearchWithPrefix(vector []float32, k int, prefix string) 
 		if !ok {
 			continue
 		}
-		if prefix != "" && !strings.HasPrefix(logical, prefix) {
-			continue
-		}
+		// prefix filtering already done in else branch above
 		out = append(out, ScoredID{ID: logical, Distance: float64(dists[i])})
 	}
 	return out, nil
