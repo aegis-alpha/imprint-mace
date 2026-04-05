@@ -6,7 +6,9 @@ builds:
     binary: imprint
     env:
       - CGO_ENABLED=1
-      - CGO_LDFLAGS=-lusearch_c
+      # Match CI / Dockerfile: quoted #include "usearch.h" needs explicit include path
+      - CGO_CFLAGS=-I/usr/local/include
+      - CGO_LDFLAGS=-L/usr/local/lib -lusearch_c
     flags:
       - -tags=sqlite_fts5
     ldflags:
