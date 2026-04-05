@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Reranker is now provider-agnostic and always enabled in query flow: default local cosine reranking (zero-config, no API call) with optional HTTP provider rerank via `[[providers.reranker]]`. Generic client targets `/v1/rerank` with Cohere `/v2/rerank` compatibility. Cohere-specific client removed.
 - Added Prism mode via `[llm].base_url`: single-endpoint routing for extraction/query/consolidation/embedding/rerank with task headers (`X-Prism-Task`, `X-Prism-App`), direct `[[providers.*]]` chains ignored while active, and provider health checks skipped in this mode.
 
+## [0.6.1] - 2026-04-05
+
+### Fixed
+
+- USearch SIGSEGV on AMD EPYC-Rome (Gitea #1): replaced pre-built USearch `.deb` package with CMake source build in Dockerfile, CI, and release workflows. The pre-built binary used SIMD instructions (likely AVX-512) unsupported by EPYC-Rome. Source build compiles with the CPU features available on the build machine, producing a compatible binary on any architecture.
+- Dockerfile: new multi-stage `usearch-builder` stage builds USearch v2.24.0 from source. Builder and runtime stages COPY only the artifacts (`libusearch_c.so`, `usearch.h`). Eliminates `.deb` download and `dpkg` from both stages.
+- CI (`ci.yml`): all three jobs (test, security, integration) now build USearch from source instead of installing `.deb`. Added missing explicit `CGO_CFLAGS`/`CGO_LDFLAGS` env vars to `govulncheck` and integration test steps (previously set via `GITHUB_ENV` which was removed with the `.deb` step).
+- Release (`release.yml`): replaced `.deb` install with source build, aligned with CI and Dockerfile.
+
 ## [0.6.0] - 2026-04-05
 
 ### Added

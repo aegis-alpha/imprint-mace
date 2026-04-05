@@ -19,14 +19,22 @@ jobs:
         with:
           go-version-file: go.mod
       
-      - name: Install build deps and USearch C library
+      - name: Install build deps and build USearch from source
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc libsqlite3-dev
-          DEB="/tmp/usearch_linux_amd64_2.24.0.deb"
-          wget -q -O "$DEB" https://github.com/unum-cloud/USearch/releases/download/v2.24.0/usearch_linux_amd64_2.24.0.deb
-          sudo dpkg -i "$DEB" || sudo apt-get install -f -y
-          rm -f "$DEB"
+          sudo apt-get install -y --no-install-recommends gcc g++ cmake git libsqlite3-dev
+          git clone --depth 1 --branch v2.24.0 https://github.com/unum-cloud/usearch.git /tmp/usearch
+          cd /tmp/usearch
+          cmake -B build_release \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSEARCH_BUILD_LIB_C=ON \
+            -DUSEARCH_BUILD_TEST_C=OFF \
+            -DUSEARCH_BUILD_BENCH_CPP=OFF \
+            -DUSEARCH_BUILD_TEST_CPP=OFF
+          cmake --build build_release --config Release -j$(nproc)
+          sudo cp build_release/libusearch_c.so /usr/local/lib/
+          sudo cp c/usearch.h /usr/local/include/
+          sudo ldconfig
       
       - uses: goreleaser/goreleaser-action@v6
         with:
