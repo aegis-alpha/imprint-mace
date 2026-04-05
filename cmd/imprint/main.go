@@ -277,6 +277,9 @@ func openStore(logger *slog.Logger, cfg *config.Config) *db.SQLiteStore {
 }
 
 func newEmbedderChainOptional(cfg *config.Config) provider.Embedder {
+	if cfg == nil {
+		return nil
+	}
 	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
 	if err != nil || embChain == nil {
 		return nil
