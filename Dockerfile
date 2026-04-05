@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim AS usearch-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc g++ cmake git ca-certificates \
-    && git clone --depth 1 --branch v2.24.0 https://github.com/unum-cloud/usearch.git /tmp/usearch \
+    && git clone --depth 1 --recurse-submodules --shallow-submodules --branch v2.24.0 https://github.com/unum-cloud/usearch.git /tmp/usearch \
     && cd /tmp/usearch \
     && cmake -B build_release \
         -DCMAKE_BUILD_TYPE=Release \
