@@ -6,12 +6,12 @@ builds:
     binary: imprint
     env:
       - CGO_ENABLED=1
+      - CGO_LDFLAGS=-lusearch_c
     flags:
       - -tags=sqlite_fts5
     ldflags:
       - -s -w
       - -X main.version={{.Version}}
-      - -extldflags=-lusearch_c
     goos:
       - linux
     goarch:
