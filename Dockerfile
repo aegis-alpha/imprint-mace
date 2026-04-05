@@ -1,5 +1,5 @@
 FROM debian:bookworm-slim AS usearch-builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y \
         gcc g++ cmake git ca-certificates \
     && git clone --depth 1 --recurse-submodules --shallow-submodules --branch v2.24.0 https://github.com/unum-cloud/usearch.git /tmp/usearch \
     && cd /tmp/usearch \

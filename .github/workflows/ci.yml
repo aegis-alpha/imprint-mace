@@ -169,6 +169,7 @@ jobs:
           CGO_ENABLED: "1"
           CGO_CFLAGS: -I/usr/local/include
           CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
+          IMPRINT_SKIP_USEARCH: "1"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           go test -tags 'sqlite_fts5 integration' -timeout 120s -count=1 -v ./internal/...
