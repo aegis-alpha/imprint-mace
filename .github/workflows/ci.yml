@@ -47,21 +47,34 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         env:
           CGO_ENABLED: "1"
-          CGO_LDFLAGS: -lusearch_c
+          CGO_CFLAGS: -I/usr/local/include
+          CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
         with:
           version: v2.11.3
           args: --timeout=5m
 
       - name: Test with coverage
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -I/usr/local/include
+          CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
         run: |
-          CGO_ENABLED=1 go test -tags sqlite_fts5 -race -coverprofile=coverage.out ./...
+          go test -tags sqlite_fts5 -race -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tail -1
 
       - name: Vet
-        run: CGO_ENABLED=1 go vet -tags sqlite_fts5 ./...
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -I/usr/local/include
+          CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
+        run: go vet -tags sqlite_fts5 ./...
 
       - name: Build
-        run: CGO_ENABLED=1 go build -tags sqlite_fts5 -o imprint ./cmd/imprint
+        env:
+          CGO_ENABLED: "1"
+          CGO_CFLAGS: -I/usr/local/include
+          CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
+        run: go build -tags sqlite_fts5 -o imprint ./cmd/imprint
 
       - name: Retrieval eval
         run: ./imprint eval-retrieval --no-embedder --format=table
