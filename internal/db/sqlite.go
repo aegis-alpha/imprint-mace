@@ -487,17 +487,18 @@ func (s *SQLiteStore) SupersedeWithContent(ctx context.Context, oldFactID string
 }
 
 func (s *SQLiteStore) UpdateFactEmbedding(ctx context.Context, factID string, embedding []float32, modelName string) error {
-	// Add to vector index before updating database to maintain consistency
-	if s.vecIndex != nil {
-		if err := s.vecIndex.Add("fact:"+factID, embedding); err != nil {
-			return fmt.Errorf("vector index add fact: %w", err)
-		}
-	}
 	blob := float32ToBlob(embedding)
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE facts SET embedding = ?, embedding_model = ? WHERE id = ?", blob, modelName, factID)
 	if err != nil {
 		return err
+	}
+	// Vector index updated after DB commit (best-effort, index is cache)
+	if s.vecIndex != nil {
+		if err := s.vecIndex.Add("fact:"+factID, embedding); err != nil {
+			// Log but don't fail -- index can be rebuilt from DB
+			return fmt.Errorf("vector index add fact: %w (index out of sync, rebuild recommended)", err)
+		}
 	}
 	return nil
 }
@@ -1220,17 +1221,17 @@ func (s *SQLiteStore) DeleteTranscriptChunks(ctx context.Context, transcriptID s
 }
 
 func (s *SQLiteStore) UpdateChunkEmbedding(ctx context.Context, chunkID string, embedding []float32, modelName string) error {
-	// Add to vector index before updating database to maintain consistency
-	if s.vecIndex != nil {
-		if err := s.vecIndex.Add("chunk:"+chunkID, embedding); err != nil {
-			return fmt.Errorf("vector index add chunk: %w", err)
-		}
-	}
 	blob := float32ToBlob(embedding)
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE transcript_chunks SET embedding = ?, embedding_model = ? WHERE id = ?", blob, modelName, chunkID)
 	if err != nil {
 		return err
+	}
+	// Vector index updated after DB commit (best-effort, index is cache)
+	if s.vecIndex != nil {
+		if err := s.vecIndex.Add("chunk:"+chunkID, embedding); err != nil {
+			return fmt.Errorf("vector index add chunk: %w (index out of sync, rebuild recommended)", err)
+		}
 	}
 	return nil
 }
@@ -2571,14 +2572,13 @@ func (s *SQLiteStore) InsertHotMessage(ctx context.Context, msg *model.HotMessag
 	); err != nil {
 		return err
 	}
-	// Add to vector index before committing to maintain consistency
-	if len(embedding) > 0 && s.vecIndex != nil {
-		if err := s.vecIndex.Add("hot:"+msg.ID, embedding); err != nil {
-			return fmt.Errorf("vector index add hot: %w", err)
-		}
-	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+	// Vector index updated after commit (best-effort, index is cache)
+	// If this fails, index is out of sync but can be rebuilt from DB
+	if len(embedding) > 0 && s.vecIndex != nil {
+		_ = s.vecIndex.Add("hot:"+msg.ID, embedding) //nolint:errcheck
 	}
 	return nil
 }
@@ -2841,49 +2841,39 @@ func (s *SQLiteStore) MoveHotToCooldown(ctx context.Context, olderThan time.Time
 		return 0, err
 	}
 
-	// Load embeddings for vector index update before committing
-	var toRePrefix []struct {
-		id  string
-		vec []float32
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
+
+	// Vector index re-prefix after commit (best-effort, index is cache)
+	// Query committed data to get embeddings for re-prefixing
 	if s.vecIndex != nil {
-		rows, err := tx.QueryContext(ctx, `
+		rows, err := s.db.QueryContext(ctx, `
 			SELECT id, embedding FROM cooldown_messages
 			WHERE moved_from_hot = ? AND has_embedding = 1`, movedAt)
 		if err != nil {
-			return 0, fmt.Errorf("load moved embeddings: %w", err)
+			// DB commit succeeded, return nMoved with warning
+			return nMoved, fmt.Errorf("load moved embeddings for index update: %w (index may be out of sync)", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var id string
 			var blob []byte
 			if err := rows.Scan(&id, &blob); err != nil {
-				rows.Close()
-				return 0, err
+				return nMoved, fmt.Errorf("scan moved embedding: %w (index may be out of sync)", err)
 			}
 			vec := blobToFloat32(blob)
-			if len(vec) > 0 {
-				toRePrefix = append(toRePrefix, struct {
-					id  string
-					vec []float32
-				}{id, vec})
+			if len(vec) == 0 {
+				continue
+			}
+			_ = s.vecIndex.Remove("hot:" + id) //nolint:errcheck
+			if err := s.vecIndex.Add("cool:"+id, vec); err != nil {
+				return nMoved, fmt.Errorf("vector index re-prefix %s: %w (index may be out of sync)", id, err)
 			}
 		}
-		rows.Close()
 		if err := rows.Err(); err != nil {
-			return 0, err
+			return nMoved, fmt.Errorf("scan moved embeddings: %w (index may be out of sync)", err)
 		}
-
-		// Update vector index before committing DB
-		for _, item := range toRePrefix {
-			_ = s.vecIndex.Remove("hot:" + item.id) //nolint:errcheck
-			if err := s.vecIndex.Add("cool:"+item.id, item.vec); err != nil {
-				return 0, fmt.Errorf("vector index re-prefix %s: %w", item.id, err)
-			}
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, err
 	}
 
 	return nMoved, nil

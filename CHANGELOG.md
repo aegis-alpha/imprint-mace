@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 (No unreleased changes yet)
 
+## [0.5.1] - 2026-04-05
+
+### Fixed
+
+- DB-vector index consistency: vector index updates now happen after database commits. If vector index update fails, database transaction has already succeeded and the error message indicates index is out of sync. Vector index is treated as a cache that can be rebuilt from database embeddings (source of truth).
+- `InsertHotMessage`: vector index Add is best-effort after commit (won't block ingestion if index fails)
+- `MoveHotToCooldown`: vector index re-prefix after commit, returns `nMoved` on index errors (preserves count of successfully moved messages)
+- `UpdateFactEmbedding`, `UpdateChunkEmbedding`: vector index Add after DB update with descriptive errors
+- `newEmbedderChainOptional`: nil config guard to prevent panic
+- `.goreleaser.yml`: add `CGO_CFLAGS=-I/usr/local/include` for USearch header discovery
+- `.github/workflows/ci.yml`: add CGO_CFLAGS to all build steps (lint, test, vet, build)
+
 ## [0.5.0] - 2026-04-05
 
 ### Added
