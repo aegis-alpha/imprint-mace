@@ -14,16 +14,16 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 )
 
-// CohereReranker calls Cohere's /v2/rerank API (document reranking).
-type CohereReranker struct {
+// GenericReranker calls a provider rerank endpoint using OpenAI-style /v1/rerank.
+// Cohere compatibility: when base_url contains "cohere.com", /v2/rerank is used.
+type GenericReranker struct {
 	cfg    model.ProviderConfig
-	apiKey string
+	token  string
 	client *http.Client
 }
 
-// NewCohereReranker builds a reranker from providers.reranker config (name = "cohere").
-func NewCohereReranker(cfg model.ProviderConfig) (*CohereReranker, error) {
-	key, err := rerankerCredential(cfg)
+func NewGenericReranker(cfg model.ProviderConfig) (*GenericReranker, error) {
+	token, err := rerankerCredential(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -33,16 +33,15 @@ func NewCohereReranker(cfg model.ProviderConfig) (*CohereReranker, error) {
 	}
 	base := strings.TrimSpace(cfg.BaseURL)
 	if base == "" {
-		base = "https://api.cohere.com"
+		return nil, fmt.Errorf("reranker base_url is required")
 	}
-	// Store normalized base on cfg copy for URL building
-	cfg.BaseURL = strings.TrimSuffix(base, "/")
 	if strings.TrimSpace(cfg.Model) == "" {
-		cfg.Model = "rerank-english-v3.0"
+		return nil, fmt.Errorf("reranker model is required")
 	}
-	return &CohereReranker{
+	cfg.BaseURL = strings.TrimSuffix(base, "/")
+	return &GenericReranker{
 		cfg:    cfg,
-		apiKey: key,
+		token:  token,
 		client: &http.Client{Timeout: timeout},
 	}, nil
 }
@@ -58,26 +57,35 @@ func rerankerCredential(cfg model.ProviderConfig) (string, error) {
 			return k, nil
 		}
 	}
+	if len(cfg.Headers) > 0 {
+		return "", nil
+	}
 	return "", fmt.Errorf("no API key for reranker (env %s / %s)", cfg.TokenEnv, cfg.APIKeyEnv)
 }
 
-type cohereRerankRequest struct {
+type genericRerankRequest struct {
 	Model     string   `json:"model"`
 	Query     string   `json:"query"`
 	Documents []string `json:"documents"`
 	TopN      int      `json:"top_n"`
 }
 
-type cohereRerankResponse struct {
+type genericRerankResponse struct {
 	Results []struct {
-		Index            int     `json:"index"`
-		RelevanceScore   float64 `json:"relevance_score"`
+		Index          int     `json:"index"`
+		RelevanceScore float64 `json:"relevance_score"`
 	} `json:"results"`
 }
 
-// Rerank implements [Reranker]. Reorders items using Cohere scores; output length
-// matches input. topN selects API top_n (capped to len(items)).
-func (c *CohereReranker) Rerank(ctx context.Context, query string, items []RankedItem, topN int) ([]RankedItem, error) {
+func (g *GenericReranker) rerankPath() string {
+	if strings.EqualFold(strings.TrimSpace(g.cfg.Name), "cohere") ||
+		strings.Contains(strings.ToLower(g.cfg.BaseURL), "cohere.com") {
+		return "/v2/rerank"
+	}
+	return "/v1/rerank"
+}
+
+func (g *GenericReranker) Rerank(ctx context.Context, query string, items []RankedItem, topN int) ([]RankedItem, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -91,27 +99,35 @@ func (c *CohereReranker) Rerank(ctx context.Context, query string, items []Ranke
 			docs[i] = items[i].Fact.ID
 		}
 	}
-
-	body := cohereRerankRequest{
-		Model:     c.cfg.Model,
+	reqBody := genericRerankRequest{
+		Model:     g.cfg.Model,
 		Query:     query,
 		Documents: docs,
 		TopN:      topN,
 	}
-	payload, err := json.Marshal(body)
+	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal rerank request: %w", err)
 	}
 
-	url := c.cfg.BaseURL + "/v2/rerank"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		g.cfg.BaseURL+g.rerankPath(),
+		bytes.NewReader(payload),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create rerank request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if g.token != "" {
+		req.Header.Set("Authorization", "Bearer "+g.token)
+	}
+	for k, v := range g.cfg.Headers {
+		req.Header.Set(k, v)
+	}
 
-	resp, err := c.client.Do(req)
+	resp, err := g.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("rerank http: %w", err)
 	}
@@ -124,7 +140,7 @@ func (c *CohereReranker) Rerank(ctx context.Context, query string, items []Ranke
 		return nil, fmt.Errorf("rerank status %d: %s", resp.StatusCode, truncateRerankErr(respBody))
 	}
 
-	var parsed cohereRerankResponse
+	var parsed genericRerankResponse
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return nil, fmt.Errorf("parse rerank response: %w", err)
 	}
@@ -140,7 +156,6 @@ func (c *CohereReranker) Rerank(ctx context.Context, query string, items []Ranke
 		item.Score = r.RelevanceScore
 		out = append(out, item)
 	}
-	// Append any missing indices in original order (partial API response).
 	for i := range items {
 		if !used[i] {
 			out = append(out, items[i])

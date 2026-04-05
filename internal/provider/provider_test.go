@@ -70,6 +70,35 @@ func TestOpenAICompatible_Success(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatible_CustomHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Prism-Task"); got != "query" {
+			t.Fatalf("expected X-Prism-Task query, got %q", got)
+		}
+		if got := r.Header.Get("X-Prism-App"); got != "imprint" {
+			t.Fatalf("expected X-Prism-App imprint, got %q", got)
+		}
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Content: "ok"}}},
+		})
+	}))
+	defer srv.Close()
+
+	cfg := model.ProviderConfig{
+		Name:    "prism",
+		BaseURL: srv.URL,
+		Model:   "auto",
+		Headers: map[string]string{
+			"X-Prism-Task": "query",
+			"X-Prism-App":  "imprint",
+		},
+	}
+	p := NewOpenAICompatible(cfg, "")
+	if _, err := p.Send(context.Background(), Request{UserPrompt: "hello"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestOpenAICompatible_ServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
@@ -456,5 +485,23 @@ func TestNewChain_TokenAuth(t *testing.T) {
 	}
 	if !ap.isToken {
 		t.Error("expected isToken=true for token-based auth")
+	}
+}
+
+func TestNewChain_AllowsHeadersOnlyProvider(t *testing.T) {
+	configs := []model.ProviderConfig{
+		{
+			Name:    "prism",
+			BaseURL: "https://prism.example.com/v1",
+			Model:   "auto",
+			Headers: map[string]string{"X-Prism-Task": "query"},
+		},
+	}
+	chain, err := NewChain(configs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chain.providers) != 1 {
+		t.Fatalf("expected 1 provider, got %d", len(chain.providers))
 	}
 }

@@ -3,8 +3,11 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
@@ -12,6 +15,7 @@ import (
 
 type Config struct {
 	Providers     ProviderChains      `toml:"providers"`
+	LLM           LLMConfig           `toml:"llm"`
 	Consolidation ConsolidationConfig `toml:"consolidation"`
 	Embedding     EmbeddingConfig     `toml:"embedding"`
 	Retention     RetentionConfig     `toml:"retention"`
@@ -27,6 +31,16 @@ type Config struct {
 	Hot           HotConfig           `toml:"hot"`
 	Cool          CoolConfig          `toml:"cool"`
 	Rerank        RerankConfig        `toml:"rerank"`
+}
+
+// LLMConfig controls Prism mode: single-endpoint routing for all LLM tasks.
+type LLMConfig struct {
+	BaseURL string `toml:"base_url"`
+}
+
+// LLMEnabled reports whether Prism mode is active.
+func (c *Config) LLMEnabled() bool {
+	return strings.TrimSpace(c.LLM.BaseURL) != ""
 }
 
 // RerankConfig controls optional post-merge reranking; see [[providers.reranker]].
@@ -407,16 +421,25 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	if cfg.LLMEnabled() && hasAnyDirectProviders(cfg.Providers) {
+		slog.Warn("Prism mode active, ignoring [[providers.*]] configuration")
+	}
 
 	return &cfg, nil
 }
 
 func (c *Config) validate() error {
-	if len(c.Providers.Extraction) == 0 {
+	if !c.LLMEnabled() && len(c.Providers.Extraction) == 0 {
 		return fmt.Errorf("at least one extraction provider required")
 	}
 	if c.DB.Path == "" {
 		return fmt.Errorf("db.path is required")
+	}
+	if c.LLMEnabled() {
+		u, err := url.Parse(strings.TrimSpace(c.LLM.BaseURL))
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("llm.base_url must be a valid URL")
+		}
 	}
 	if c.CoolEnabled() && !c.HotEnabled() {
 		return fmt.Errorf("cool.enabled requires hot.enabled")
@@ -434,4 +457,12 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+func hasAnyDirectProviders(p ProviderChains) bool {
+	return len(p.Extraction) > 0 ||
+		len(p.Consolidation) > 0 ||
+		len(p.Query) > 0 ||
+		len(p.Embedding) > 0 ||
+		len(p.Reranker) > 0
 }

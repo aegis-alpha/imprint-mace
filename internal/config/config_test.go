@@ -51,6 +51,40 @@ priority = 1
 	}
 }
 
+func TestLoad_PrismModeWithoutDirectProviders(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[llm]
+base_url = "https://prism.example.com/v1"
+`
+	cfg := loadFromString(t, content)
+	if !cfg.LLMEnabled() {
+		t.Fatal("expected llm mode enabled")
+	}
+	if cfg.LLM.BaseURL != "https://prism.example.com/v1" {
+		t.Fatalf("unexpected llm.base_url: %q", cfg.LLM.BaseURL)
+	}
+}
+
+func TestLoad_PrismModeInvalidURL(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[llm]
+base_url = "://bad-url"
+`
+	_, err := loadStringConfig(t, content)
+	if err == nil {
+		t.Fatal("expected invalid llm.base_url error")
+	}
+	if !strings.Contains(err.Error(), "llm.base_url") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoad_MultipleProviders(t *testing.T) {
 	content := `
 [db]

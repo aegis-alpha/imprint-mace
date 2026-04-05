@@ -2,7 +2,6 @@ package query
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/aegis-alpha/imprint-mace/internal/model"
@@ -34,10 +33,10 @@ func WithReranker(r Reranker, topN int) QuerierOption {
 	}
 }
 
-// applyRerankToRankedItems reorders the first rerankTopN items when they are all
+// applyRerankWith reorders the first rerankTopN items when they are all
 // structured facts (no hot/cooldown rows in that prefix). Otherwise returns items unchanged.
-func (q *Querier) applyRerankToRankedItems(ctx context.Context, question string, items []rankedItem) []rankedItem {
-	if q.reranker == nil || len(items) == 0 {
+func (q *Querier) applyRerankWith(ctx context.Context, question string, items []rankedItem, reranker Reranker) []rankedItem {
+	if reranker == nil || len(items) == 0 {
 		return items
 	}
 	n := q.rerankTopN
@@ -55,7 +54,7 @@ func (q *Querier) applyRerankToRankedItems(ctx context.Context, question string,
 	for i := range head {
 		ri[i] = RankedItem{Fact: *head[i].fact, Score: head[i].score}
 	}
-	out, err := q.reranker.Rerank(ctx, question, ri, n)
+	out, err := reranker.Rerank(ctx, question, ri, n)
 	if err != nil {
 		q.logger.Warn("rerank failed, using merge order", "error", err)
 		return items
@@ -119,10 +118,5 @@ func factTextForRerank(f model.Fact) string {
 
 // NewRerankerFromConfig builds a reranker from a single provider entry.
 func NewRerankerFromConfig(cfg model.ProviderConfig) (Reranker, error) {
-	switch strings.ToLower(strings.TrimSpace(cfg.Name)) {
-	case "cohere":
-		return NewCohereReranker(cfg)
-	default:
-		return nil, fmt.Errorf("unsupported reranker provider %q", cfg.Name)
-	}
+	return NewGenericReranker(cfg)
 }

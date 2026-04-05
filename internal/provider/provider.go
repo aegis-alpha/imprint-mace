@@ -96,7 +96,10 @@ func newProvider(cfg model.ProviderConfig) (Provider, error) {
 	default:
 		cred, _, err := credentials(cfg)
 		if err != nil {
-			return nil, err
+			if len(cfg.Headers) == 0 {
+				return nil, err
+			}
+			cred = ""
 		}
 		return NewOpenAICompatible(cfg, cred), nil
 	}

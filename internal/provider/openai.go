@@ -71,7 +71,12 @@ func (p *OpenAICompatible) Send(ctx context.Context, req Request) (*Response, er
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	if p.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	}
+	for k, v := range p.config.Headers {
+		httpReq.Header.Set(k, v)
+	}
 	if strings.Contains(p.config.BaseURL, "openrouter.ai") {
 		httpReq.Header.Set("HTTP-Referer", "https://github.com/aegis-alpha/imprint-MACE")
 		httpReq.Header.Set("X-Title", "Imprint MACE")

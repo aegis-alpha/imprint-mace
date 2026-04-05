@@ -41,11 +41,14 @@ func newEmbedder(cfg model.ProviderConfig) (Embedder, error) {
 	case "ollama":
 		return NewOllamaEmbedder(cfg.BaseURL, cfg.Model), nil
 	default:
-		key := os.Getenv(cfg.APIKeyEnv)
-		if key == "" {
+		key := ""
+		if cfg.APIKeyEnv != "" {
+			key = os.Getenv(cfg.APIKeyEnv)
+		}
+		if key == "" && len(cfg.Headers) == 0 {
 			return nil, fmt.Errorf("no API key for embedder %s (env: %s)", cfg.Name, cfg.APIKeyEnv)
 		}
-		return NewOpenAIEmbedder(cfg.BaseURL, cfg.Model, key), nil
+		return NewOpenAIEmbedder(cfg.BaseURL, cfg.Model, key, cfg.Headers), nil
 	}
 }
 

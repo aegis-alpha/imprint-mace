@@ -20,7 +20,7 @@ func TestOpenAIEmbedder_ParsesResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	emb := NewOpenAIEmbedder(srv.URL, "text-embedding-3-small", "test-key")
+	emb := NewOpenAIEmbedder(srv.URL, "text-embedding-3-small", "test-key", nil)
 	vec, err := emb.Embed(context.Background(), "hello world")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -43,7 +43,7 @@ func TestOpenAIEmbedder_HandlesError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	emb := NewOpenAIEmbedder(srv.URL, "text-embedding-3-small", "test-key")
+	emb := NewOpenAIEmbedder(srv.URL, "text-embedding-3-small", "test-key", nil)
 	_, err := emb.Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error on 429")
@@ -108,8 +108,8 @@ func TestEmbedderChain_Fallback(t *testing.T) {
 
 	chain := &EmbedderChain{
 		embedders: []Embedder{
-			NewOpenAIEmbedder(failSrv.URL, "fail-model", "key"),
-			NewOpenAIEmbedder(okSrv.URL, "ok-model", "key"),
+			NewOpenAIEmbedder(failSrv.URL, "fail-model", "key", nil),
+			NewOpenAIEmbedder(okSrv.URL, "ok-model", "key", nil),
 		},
 	}
 
@@ -125,12 +125,34 @@ func TestEmbedderChain_Fallback(t *testing.T) {
 func TestEmbedderChain_ModelName(t *testing.T) {
 	chain := &EmbedderChain{
 		embedders: []Embedder{
-			NewOpenAIEmbedder("http://x", "primary-model", "key"),
+			NewOpenAIEmbedder("http://x", "primary-model", "key", nil),
 			NewOllamaEmbedder("http://y", "fallback-model"),
 		},
 	}
 	if chain.ModelName() != "primary-model" {
 		t.Errorf("expected primary-model, got %q", chain.ModelName())
+	}
+}
+
+func TestOpenAIEmbedder_CustomHeaders(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Prism-Task"); got != "embedding" {
+			t.Fatalf("expected X-Prism-Task embedding, got %q", got)
+		}
+		if got := r.Header.Get("X-Prism-App"); got != "imprint" {
+			t.Fatalf("expected X-Prism-App imprint, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":[{"embedding":[0.1,0.2]}]}`)
+	}))
+	defer srv.Close()
+
+	emb := NewOpenAIEmbedder(srv.URL, "auto", "", map[string]string{
+		"X-Prism-Task": "embedding",
+		"X-Prism-App":  "imprint",
+	})
+	if _, err := emb.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

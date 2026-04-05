@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed
+
+- Reranker is now provider-agnostic and always enabled in query flow: default local cosine reranking (zero-config, no API call) with optional HTTP provider rerank via `[[providers.reranker]]`. Generic client targets `/v1/rerank` with Cohere `/v2/rerank` compatibility. Cohere-specific client removed.
+- Added Prism mode via `[llm].base_url`: single-endpoint routing for extraction/query/consolidation/embedding/rerank with task headers (`X-Prism-Task`, `X-Prism-App`), direct `[[providers.*]]` chains ignored while active, and provider health checks skipped in this mode.
+
 ## [0.6.0] - 2026-04-05
 
 ### Added

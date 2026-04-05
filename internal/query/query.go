@@ -129,10 +129,9 @@ func (q *Querier) Retrieve(ctx context.Context, question string) (*RetrievalResu
 			q.logger.Warn("failed to embed question, falling back to text-only", "error", err)
 		}
 	}
-
 	r := q.retrieve(ctx, question, embedding)
 	ranked := q.mergeRanked(r)
-	ranked = q.applyOptionalRerank(ctx, question, ranked)
+	ranked = q.applyOptionalRerank(ctx, question, embedding, ranked)
 
 	vectorIDs := map[string]bool{}
 	for i := range r.factsByVector {
@@ -185,13 +184,12 @@ func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResul
 			q.logger.Warn("failed to embed question, falling back to text-only", "error", err)
 		}
 	}
-
 	retrievalStart := time.Now()
 	retrieved := q.retrieve(ctx, question, embedding)
 	retrievalMs := time.Since(retrievalStart).Milliseconds()
 
 	ranked := q.mergeRanked(retrieved)
-	ranked = q.applyOptionalRerank(ctx, question, ranked)
+	ranked = q.applyOptionalRerank(ctx, question, embedding, ranked)
 
 	enriched := q.enrichWithContext(ctx, ranked, retrieved)
 
@@ -416,9 +414,14 @@ func (q *Querier) retrieve(ctx context.Context, question string, embedding []flo
 	return r
 }
 
-// applyOptionalRerank runs the optional post-merge reranker when configured.
-func (q *Querier) applyOptionalRerank(ctx context.Context, question string, items []rankedItem) []rankedItem {
-	return q.applyRerankToRankedItems(ctx, question, items)
+// applyOptionalRerank runs post-merge reranking with per-request state.
+func (q *Querier) applyOptionalRerank(ctx context.Context, question string, embedding []float32, items []rankedItem) []rankedItem {
+	if cr, ok := q.reranker.(*CosineReranker); ok {
+		local := *cr
+		local.SetQueryEmbedding(embedding)
+		return q.applyRerankWith(ctx, question, items, &local)
+	}
+	return q.applyRerankWith(ctx, question, items, q.reranker)
 }
 
 // retrieveByGraph extracts entity names from the question by word matching,

@@ -25,7 +25,6 @@ import (
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/cooldown"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
-	"github.com/aegis-alpha/imprint-mace/internal/segment"
 	impeval "github.com/aegis-alpha/imprint-mace/internal/eval"
 	"github.com/aegis-alpha/imprint-mace/internal/extraction"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
@@ -35,6 +34,7 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/quality"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
+	"github.com/aegis-alpha/imprint-mace/internal/segment"
 	"github.com/aegis-alpha/imprint-mace/internal/transcript"
 	"github.com/aegis-alpha/imprint-mace/internal/update"
 	"github.com/aegis-alpha/imprint-mace/internal/watcher"
@@ -261,6 +261,9 @@ func loadConfig(logger *slog.Logger, cfgPath string) *config.Config {
 		logger.Error("failed to load config", "path", cfgPath, "error", err)
 		os.Exit(1)
 	}
+	if prismModeEnabled(cfg) {
+		logger.Info("Prism mode: all API calls routed to endpoint", "base_url", cfg.LLM.BaseURL)
+	}
 	return cfg
 }
 
@@ -278,11 +281,50 @@ func openStore(logger *slog.Logger, cfg *config.Config) *db.SQLiteStore {
 	return store
 }
 
+func prismModeEnabled(cfg *config.Config) bool {
+	return cfg != nil && cfg.LLMEnabled()
+}
+
+func prismProviderConfig(cfg *config.Config, task string) model.ProviderConfig {
+	return model.ProviderConfig{
+		Name:    "prism",
+		BaseURL: strings.TrimSpace(cfg.LLM.BaseURL),
+		Model:   "auto",
+		Headers: map[string]string{
+			"X-Prism-Task": task,
+			"X-Prism-App":  "imprint",
+		},
+	}
+}
+
+func providerConfigsForTask(cfg *config.Config, task string) []model.ProviderConfig {
+	if prismModeEnabled(cfg) {
+		return []model.ProviderConfig{prismProviderConfig(cfg, task)}
+	}
+	switch task {
+	case "extraction":
+		return cfg.Providers.Extraction
+	case "consolidation":
+		return cfg.Providers.Consolidation
+	case "query":
+		if len(cfg.Providers.Query) > 0 {
+			return cfg.Providers.Query
+		}
+		return cfg.Providers.Extraction
+	case "embedding":
+		return cfg.Providers.Embedding
+	case "rerank":
+		return cfg.Providers.Reranker
+	default:
+		return nil
+	}
+}
+
 func newEmbedderChainOptional(cfg *config.Config) provider.Embedder {
 	if cfg == nil {
 		return nil
 	}
-	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
 	if err != nil || embChain == nil {
 		return nil
 	}
@@ -309,7 +351,7 @@ func startHotTTLGoroutine(ctx context.Context, store db.Store, hotCfg config.Hot
 }
 
 func createEngine(logger *slog.Logger, cfg *config.Config, store db.Store) *imprint.Engine {
-	chain, err := provider.NewChain(cfg.Providers.Extraction)
+	chain, err := provider.NewChain(providerConfigsForTask(cfg, "extraction"))
 	if err != nil {
 		logger.Error("failed to create provider chain", "error", err)
 		os.Exit(1)
@@ -332,7 +374,7 @@ func createEngine(logger *slog.Logger, cfg *config.Config, store db.Store) *impr
 	}
 
 	var embedder provider.Embedder
-	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
 	if err != nil {
 		logger.Warn("failed to create embedder chain", "error", err)
 	}
@@ -345,18 +387,14 @@ func createEngine(logger *slog.Logger, cfg *config.Config, store db.Store) *impr
 }
 
 func createQuerier(logger *slog.Logger, cfg *config.Config, store db.Store) *query.Querier {
-	queryProviders := cfg.Providers.Query
-	if len(queryProviders) == 0 {
-		queryProviders = cfg.Providers.Extraction
-	}
-	chain, err := provider.NewChain(queryProviders)
+	chain, err := provider.NewChain(providerConfigsForTask(cfg, "query"))
 	if err != nil {
 		logger.Error("failed to create query provider chain", "error", err)
 		os.Exit(1)
 	}
 
 	var embedder provider.Embedder
-	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
 	if err == nil && embChain != nil {
 		embedder = embChain
 	}
@@ -367,17 +405,22 @@ func createQuerier(logger *slog.Logger, cfg *config.Config, store db.Store) *que
 	}
 
 	var qOpts []query.QuerierOption
-	if len(cfg.Providers.Reranker) > 1 {
+	var rr query.Reranker
+	rerankProviders := providerConfigsForTask(cfg, "rerank")
+	if !prismModeEnabled(cfg) && len(rerankProviders) > 1 {
 		logger.Warn("multiple [[providers.reranker]] entries configured; only the first is used")
 	}
-	if len(cfg.Providers.Reranker) > 0 {
-		rr, err := query.NewRerankerFromConfig(cfg.Providers.Reranker[0])
+	if len(rerankProviders) > 0 {
+		var err error
+		rr, err = query.NewRerankerFromConfig(rerankProviders[0])
 		if err != nil {
-			logger.Warn("reranker disabled", "error", err)
-		} else {
-			qOpts = append(qOpts, query.WithReranker(rr, cfg.Rerank.TopN))
+			logger.Warn("reranker init failed, using cosine fallback", "error", err)
+			rr = query.NewCosineReranker()
 		}
+	} else {
+		rr = query.NewCosineReranker()
 	}
+	qOpts = append(qOpts, query.WithReranker(rr, cfg.Rerank.TopN))
 
 	return query.New(store, embedder, chain, transcriptDir, logger, qOpts...)
 }
@@ -389,7 +432,7 @@ func createBuilder(cfg *config.Config, store db.Store, logger *slog.Logger) *imp
 	}
 
 	var embedder provider.Embedder
-	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
 	if err == nil && embChain != nil {
 		embedder = embChain
 	}
@@ -429,10 +472,11 @@ func runContext(logger *slog.Logger, cfgPath, hint string) {
 }
 
 func runConsolidation(ctx context.Context, logger *slog.Logger, cfg *config.Config, store db.Store) {
-	if len(cfg.Providers.Consolidation) == 0 {
+	consolidationProviders := providerConfigsForTask(cfg, "consolidation")
+	if len(consolidationProviders) == 0 {
 		return
 	}
-	consChain, err := provider.NewChain(cfg.Providers.Consolidation)
+	consChain, err := provider.NewChain(consolidationProviders)
 	if err != nil {
 		logger.Warn("consolidation provider unavailable", "error", err)
 		return
@@ -476,8 +520,7 @@ func runOptimization(ctx context.Context, logger *slog.Logger, cfg *config.Confi
 		return
 	}
 
-	extractionProviders := cfg.Providers.Extraction
-	chain, err := provider.NewChain(extractionProviders)
+	chain, err := provider.NewChain(providerConfigsForTask(cfg, "extraction"))
 	if err != nil {
 		logger.Warn("optimization: no provider chain", "error", err)
 		return
@@ -649,7 +692,7 @@ func runConsolidateCmd(logger *slog.Logger, cfgPath string) {
 	store := openStore(logger, cfg)
 	defer store.Close()
 
-	if len(cfg.Providers.Consolidation) == 0 {
+	if len(providerConfigsForTask(cfg, "consolidation")) == 0 {
 		logger.Error("no consolidation providers configured")
 		os.Exit(1)
 	}
@@ -760,7 +803,7 @@ func runEmbedBackfill(logger *slog.Logger, cfgPath, modelFilter string) {
 	store := openStore(logger, cfg)
 	defer store.Close()
 
-	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
 	if err != nil || embChain == nil {
 		logger.Error("no embedding providers configured")
 		os.Exit(1)
@@ -815,7 +858,7 @@ func runEmbedBackfillChunks(logger *slog.Logger, cfgPath, modelFilter string) {
 	store := openStore(logger, cfg)
 	defer store.Close()
 
-	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
 	if err != nil || embChain == nil {
 		logger.Error("no embedding providers configured")
 		os.Exit(1)
@@ -913,7 +956,9 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 	store := openStore(logger, cfg)
 	defer store.Close()
 
-	runHealthCheckAtStartup(logger, cfg, store)
+	if !prismModeEnabled(cfg) {
+		runHealthCheckAtStartup(logger, cfg, store)
+	}
 
 	eng := createEngine(logger, cfg, store)
 	q := createQuerier(logger, cfg, store)
@@ -959,7 +1004,7 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 	}
 
 	healthCfg := cfg.EffectiveHealthConfig()
-	if healthCfg.CatalogRefreshDays > 0 {
+	if !prismModeEnabled(cfg) && healthCfg.CatalogRefreshDays > 0 {
 		refreshCtx, refreshCancel := context.WithCancel(context.Background())
 		defer refreshCancel()
 		go func() {
@@ -976,8 +1021,9 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		logger.Info("catalog refresh goroutine started", "interval_days", healthCfg.CatalogRefreshDays)
 	}
 
-	if cfg.Consolidation.IntervalMinutes > 0 && len(cfg.Providers.Consolidation) > 0 {
-		consChain, err := provider.NewChain(cfg.Providers.Consolidation)
+	consolidationProviders := providerConfigsForTask(cfg, "consolidation")
+	if cfg.Consolidation.IntervalMinutes > 0 && len(consolidationProviders) > 0 {
+		consChain, err := provider.NewChain(consolidationProviders)
 		if err != nil {
 			logger.Warn("consolidation provider unavailable in serve mode", "error", err)
 		} else {
@@ -1128,11 +1174,15 @@ func runMCP(logger *slog.Logger, cfgPath string) {
 }
 
 func runHealthCheckAtStartup(logger *slog.Logger, cfg *config.Config, store db.Store) {
+	if prismModeEnabled(cfg) {
+		logger.Info("Prism mode active, skipping provider health checks")
+		return
+	}
 	taskConfigs := map[string][]model.ProviderConfig{
-		"extraction":    cfg.Providers.Extraction,
-		"consolidation": cfg.Providers.Consolidation,
-		"query":         cfg.Providers.Query,
-		"embedding":     cfg.Providers.Embedding,
+		"extraction":    providerConfigsForTask(cfg, "extraction"),
+		"consolidation": providerConfigsForTask(cfg, "consolidation"),
+		"query":         providerConfigsForTask(cfg, "query"),
+		"embedding":     providerConfigsForTask(cfg, "embedding"),
 	}
 	listers := provider.NewModelListersFromConfig(taskConfigs)
 	if len(listers) == 0 {
@@ -1390,7 +1440,7 @@ func runEvalGenerate(logger *slog.Logger, outputDir string) {
 func runEval(logger *slog.Logger, cfgPath, goldenDir, format string, saveBaseline, check bool, threshold float64) {
 	cfg := loadConfig(logger, cfgPath)
 
-	chain, err := provider.NewChain(cfg.Providers.Extraction)
+	chain, err := provider.NewChain(providerConfigsForTask(cfg, "extraction"))
 	if err != nil {
 		logger.Error("failed to create provider chain", "error", err)
 		os.Exit(1)
@@ -1494,7 +1544,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 
 	var embedder provider.Embedder
 	if !noEmbedder && cfg != nil {
-		embChain, embErr := provider.NewEmbedderChain(cfg.Providers.Embedding)
+		embChain, embErr := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
 		if embErr == nil && embChain != nil {
 			embedder = embChain
 
@@ -1519,11 +1569,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 
 	var sender query.Sender
 	if cfg != nil {
-		queryProviders := cfg.Providers.Query
-		if len(queryProviders) == 0 {
-			queryProviders = cfg.Providers.Extraction
-		}
-		chain, chainErr := provider.NewChain(queryProviders)
+		chain, chainErr := provider.NewChain(providerConfigsForTask(cfg, "query"))
 		if chainErr == nil {
 			sender = chain
 		}
@@ -1533,16 +1579,24 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 	if mergeStrategy != "" && mergeStrategy != "rrf" {
 		qOpts = append(qOpts, query.WithMergeStrategy(mergeStrategy))
 	}
-	if cfg != nil && len(cfg.Providers.Reranker) > 1 {
-		logger.Warn("eval: multiple [[providers.reranker]] entries; only the first is used")
+	var rr query.Reranker
+	rerankProviders := providerConfigsForTask(cfg, "rerank")
+	if cfg != nil && !prismModeEnabled(cfg) && len(rerankProviders) > 1 {
+		logger.Warn("eval: multiple [[providers.reranker]] entries configured; only the first is used")
 	}
-	if cfg != nil && len(cfg.Providers.Reranker) > 0 {
-		rr, err := query.NewRerankerFromConfig(cfg.Providers.Reranker[0])
+	if cfg != nil && len(rerankProviders) > 0 {
+		rrFromCfg, err := query.NewRerankerFromConfig(rerankProviders[0])
 		if err != nil {
-			logger.Warn("eval: reranker disabled", "error", err)
+			logger.Warn("eval: reranker init failed, using cosine fallback", "error", err)
+			rr = query.NewCosineReranker()
 		} else {
-			qOpts = append(qOpts, query.WithReranker(rr, cfg.Rerank.TopN))
+			rr = rrFromCfg
 		}
+	} else {
+		rr = query.NewCosineReranker()
+	}
+	if cfg != nil {
+		qOpts = append(qOpts, query.WithReranker(rr, cfg.Rerank.TopN))
 	}
 	q := query.New(tmpStore, embedder, sender, "", logger, qOpts...)
 
@@ -1691,11 +1745,7 @@ func runRetrievalEvalQuiet(ctx context.Context, logger *slog.Logger, cfg *config
 		return
 	}
 
-	queryProviders := cfg.Providers.Query
-	if len(queryProviders) == 0 {
-		queryProviders = cfg.Providers.Extraction
-	}
-	chain, err := provider.NewChain(queryProviders)
+	chain, err := provider.NewChain(providerConfigsForTask(cfg, "query"))
 	if err != nil {
 		logger.Warn("retrieval eval skipped: no query provider", "error", err)
 		return
@@ -1811,7 +1861,7 @@ func runOptimizeCmd(logger *slog.Logger, cfgPath string) {
 	ctx := context.Background()
 	qcfg := cfg.EffectiveQualityConfig()
 
-	chain, err := provider.NewChain(cfg.Providers.Extraction)
+	chain, err := provider.NewChain(providerConfigsForTask(cfg, "extraction"))
 	if err != nil {
 		logger.Error("failed to create provider chain", "error", err)
 		os.Exit(1)
@@ -1868,7 +1918,7 @@ func runPostOptimizeEval(logger *slog.Logger, cfg *config.Config, store *db.SQLi
 		}
 	}
 
-	chain, err := provider.NewChain(cfg.Providers.Extraction)
+	chain, err := provider.NewChain(providerConfigsForTask(cfg, "extraction"))
 	if err != nil {
 		logger.Warn("post-optimize extraction eval skipped: no provider", "error", err)
 	} else {
@@ -1925,11 +1975,7 @@ func runPostOptimizeEval(logger *slog.Logger, cfg *config.Config, store *db.SQLi
 		return
 	}
 
-	queryProviders := cfg.Providers.Query
-	if len(queryProviders) == 0 {
-		queryProviders = cfg.Providers.Extraction
-	}
-	qchain, err := provider.NewChain(queryProviders)
+	qchain, err := provider.NewChain(providerConfigsForTask(cfg, "query"))
 	if err != nil {
 		logger.Warn("post-optimize retrieval eval skipped: no query provider", "error", err)
 		return

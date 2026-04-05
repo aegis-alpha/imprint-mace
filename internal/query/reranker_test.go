@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/aegis-alpha/imprint-mace/internal/model"
@@ -38,7 +39,7 @@ func TestRerank_NilPassthrough(t *testing.T) {
 	q := New(nil, nil, nil, "", discardLogger())
 	a, b := factPtr("a", "one"), factPtr("b", "two")
 	in := []rankedItem{{fact: a, score: 1}, {fact: b, score: 0.5}}
-	out := q.applyRerankToRankedItems(context.Background(), "q", in)
+	out := q.applyRerankWith(context.Background(), "q", in, q.reranker)
 	if len(out) != len(in) {
 		t.Fatalf("len %d want %d", len(out), len(in))
 	}
@@ -59,7 +60,7 @@ func TestRerank_MockReordersHead(t *testing.T) {
 	q := New(nil, nil, nil, "", discardLogger(), WithReranker(rev, 2))
 	a, b, c := factPtr("a", "a"), factPtr("b", "b"), factPtr("c", "c")
 	in := []rankedItem{{fact: a, score: 1}, {fact: b, score: 0.9}, {fact: c, score: 0.8}}
-	out := q.applyRerankToRankedItems(context.Background(), "question", in)
+	out := q.applyRerankWith(context.Background(), "question", in, q.reranker)
 	if len(out) != 3 {
 		t.Fatalf("len %d", len(out))
 	}
@@ -87,7 +88,7 @@ func TestRerank_OrderOnlyInvariant(t *testing.T) {
 	for i := range ids {
 		items[i] = rankedItem{fact: factPtr(ids[i], ids[i]), score: float64(5 - i)}
 	}
-	out := q.applyRerankToRankedItems(context.Background(), "q", items)
+	out := q.applyRerankWith(context.Background(), "q", items, q.reranker)
 	if len(out) != len(items) {
 		t.Fatalf("length changed: %d vs %d", len(out), len(items))
 	}
@@ -123,7 +124,7 @@ func TestRerank_SkipsWhenHeadHasHotMessage(t *testing.T) {
 		{hotMessage: &h, score: 1, isRawMessage: true, messageCitationPrefix: "hot:"},
 		{fact: &f, score: 0.5},
 	}
-	out := q.applyRerankToRankedItems(context.Background(), "q", in)
+	out := q.applyRerankWith(context.Background(), "q", in, q.reranker)
 	if called {
 		t.Error("reranker should not run when prefix contains non-fact item")
 	}
@@ -132,12 +133,28 @@ func TestRerank_SkipsWhenHeadHasHotMessage(t *testing.T) {
 	}
 }
 
-func TestCohereReranker_HTTP(t *testing.T) {
+func TestGenericReranker_HTTP(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v2/rerank" {
+		if r.URL.Path != "/v1/rerank" {
 			t.Errorf("path %s", r.URL.Path)
 			w.WriteHeader(404)
 			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer k" {
+			t.Errorf("authorization header = %q", got)
+		}
+		var req genericRerankRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Model != "rerank-english-v3.0" {
+			t.Fatalf("unexpected model: %q", req.Model)
+		}
+		if req.TopN != 2 {
+			t.Fatalf("unexpected top_n: %d", req.TopN)
+		}
+		if len(req.Documents) != 2 {
+			t.Fatalf("expected 2 documents, got %d", len(req.Documents))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"results": []map[string]any{
@@ -152,12 +169,12 @@ func TestCohereReranker_HTTP(t *testing.T) {
 	defer os.Unsetenv("COHERE_TEST_KEY")
 
 	cfg := model.ProviderConfig{
-		Name:      "cohere",
+		Name:      "jina",
 		BaseURL:   ts.URL,
 		Model:     "rerank-english-v3.0",
 		APIKeyEnv: "COHERE_TEST_KEY",
 	}
-	c, err := NewCohereReranker(cfg)
+	c, err := NewGenericReranker(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,5 +191,133 @@ func TestCohereReranker_HTTP(t *testing.T) {
 	}
 	if out[0].Fact.ID != "y" || out[1].Fact.ID != "x" {
 		t.Errorf("order want y,x got %s,%s", out[0].Fact.ID, out[1].Fact.ID)
+	}
+}
+
+func TestGenericReranker_CustomHeaders(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Prism-Task"); got != "rerank" {
+			t.Fatalf("expected X-Prism-Task rerank, got %q", got)
+		}
+		if got := r.Header.Get("X-Prism-App"); got != "imprint" {
+			t.Fatalf("expected X-Prism-App imprint, got %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{{"index": 0, "relevance_score": 1.0}},
+		})
+	}))
+	defer ts.Close()
+
+	c, err := NewGenericReranker(model.ProviderConfig{
+		BaseURL: ts.URL,
+		Model:   "auto",
+		Headers: map[string]string{
+			"X-Prism-Task": "rerank",
+			"X-Prism-App":  "imprint",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Rerank(context.Background(), "q", []RankedItem{{Fact: model.Fact{ID: "x", Content: "x"}}}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGenericReranker_CoherePathCompatibility(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v2/rerank") {
+			t.Errorf("path %s", r.URL.Path)
+			w.WriteHeader(404)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []map[string]any{
+				{"index": 0, "relevance_score": 0.9},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	_ = os.Setenv("COHERE_TEST_KEY", "k")
+	defer os.Unsetenv("COHERE_TEST_KEY")
+
+	cfg := model.ProviderConfig{
+		Name:      "cohere",
+		BaseURL:   ts.URL,
+		Model:     "rerank-english-v3.0",
+		APIKeyEnv: "COHERE_TEST_KEY",
+	}
+	c, err := NewGenericReranker(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Rerank(context.Background(), "q", []RankedItem{{Fact: model.Fact{ID: "x", Content: "x"}}}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGenericReranker_Non200(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	defer ts.Close()
+
+	_ = os.Setenv("COHERE_TEST_KEY", "k")
+	defer os.Unsetenv("COHERE_TEST_KEY")
+
+	c, err := NewGenericReranker(model.ProviderConfig{
+		BaseURL:   ts.URL,
+		Model:     "rerank-english-v3.0",
+		APIKeyEnv: "COHERE_TEST_KEY",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Rerank(context.Background(), "q", []RankedItem{{Fact: model.Fact{ID: "x", Content: "x"}}}, 1)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestGenericReranker_MalformedResponse(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("{not json"))
+	}))
+	defer ts.Close()
+
+	_ = os.Setenv("COHERE_TEST_KEY", "k")
+	defer os.Unsetenv("COHERE_TEST_KEY")
+
+	c, err := NewGenericReranker(model.ProviderConfig{
+		BaseURL:   ts.URL,
+		Model:     "rerank-english-v3.0",
+		APIKeyEnv: "COHERE_TEST_KEY",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Rerank(context.Background(), "q", []RankedItem{{Fact: model.Fact{ID: "x", Content: "x"}}}, 1)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestRerankerFromConfig_UsesGeneric(t *testing.T) {
+	_ = os.Setenv("COHERE_TEST_KEY", "k")
+	defer os.Unsetenv("COHERE_TEST_KEY")
+
+	r, err := NewRerankerFromConfig(model.ProviderConfig{
+		BaseURL:   "https://example.com",
+		Model:     "rerank-english-v3.0",
+		APIKeyEnv: "COHERE_TEST_KEY",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.(*GenericReranker); !ok {
+		t.Fatalf("expected *GenericReranker, got %T", r)
 	}
 }

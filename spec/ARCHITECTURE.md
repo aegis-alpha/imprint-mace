@@ -203,7 +203,7 @@ type rankedItem struct {
 
 **Set-union alternative:** `--merge-strategy=set-union` uses dense-first ordering: vector hits keep similarity order, then FTS5-only hits, then graph-only hits, then hot/cooldown hits. No RRF scoring. Programmatic: `query.WithMergeStrategy("set-union")`.
 
-**Optional post-merge rerank:** When `[[providers.reranker]]` is set (e.g. Cohere `name = "cohere"` with `api_key_env` and `model`), the querier uses **only the first** table entry; additional rows are ignored (startup warning). The querier may call an external rerank API on a prefix of the merged list. `[rerank]` `top_n` limits how many leading items are considered. Reranking applies only when that prefix consists entirely of structured facts (not hot/cooldown raw rows); it reorders within the prefix and leaves the tail unchanged. On API failure or an invalid response, merge order is kept.
+**Post-merge rerank:** The querier always has a reranker. Default is local cosine reranking (no network call): query embedding vs `Fact.Embedding`, with rows missing embeddings appended after reranked rows. When `[[providers.reranker]]` is configured, the first provider entry is used for HTTP reranking and cosine is used as fallback if client init fails. Provider rerank is API-compatible (`/v1/rerank`) for any OpenAI-style endpoint, with Cohere compatibility on `/v2/rerank`. `[rerank]` `top_n` limits how many leading items are considered. Reranking applies only when that prefix consists entirely of structured facts (not hot/cooldown raw rows); it reorders within the prefix and leaves the tail unchanged. On API failure or an invalid response, merge order is kept.
 
 ### 2.3 ReadContext Enrichment
 
@@ -536,9 +536,20 @@ The OpenAI-compatible provider covers OpenAI, Google Gemini, OpenRouter, Voyage 
 
 Credentials are resolved per provider: `token_env` (OAuth/Bearer token) is tried first; if empty, falls back to `api_key_env` (API key). **Exception:** Embedders (`newEmbedder`) only check `api_key_env`, skipping `token_env` entirely.
 
+### 6.2 Prism Mode (single endpoint)
+
+When `[llm].base_url` is configured, Imprint switches to Prism mode:
+
+- All LLM-related tasks (extraction, query, consolidation, embedding, rerank) use one synthetic provider config (`name="prism"`, `model="auto"`, `base_url=[llm].base_url`).
+- Task routing is done by headers on every HTTP call:
+  - `X-Prism-Task`: `extraction`, `query`, `consolidation`, `embedding`, or `rerank`
+  - `X-Prism-App`: `imprint`
+- In this mode, `[[providers.*]]` chains are ignored.
+- Provider health checks and model catalog refresh are skipped (managed by Prism/proxy).
+
 ### 6.3 Task-Specific Chains
 
-Each task type has its own provider chain configured independently:
+In direct mode (`[llm]` disabled), each task type has its own provider chain configured independently:
 
 | Chain | Config key | Used by |
 |-------|-----------|---------|
@@ -546,7 +557,7 @@ Each task type has its own provider chain configured independently:
 | Consolidation | `[[providers.consolidation]]` | `Consolidator` |
 | Query | `[[providers.query]]` | `Querier` |
 | Embedding | `[[providers.embedding]]` | `EmbedderChain` |
-| Reranker | `[[providers.reranker]]` | Optional `Querier` post-merge rerank (e.g. Cohere `/v2/rerank`) |
+| Reranker | `[[providers.reranker]]` | Optional HTTP rerank provider (`/v1/rerank`, Cohere `/v2` compatibility) |
 
 If no query providers are configured, the extraction chain is used as fallback.
 
@@ -677,6 +688,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 |---------|---------|
 | `[db]` | Database path |
 | `[api]` | HTTP server host and port |
+| `[llm]` | Prism mode base URL (single-endpoint routing for all LLM tasks) |
 | `[consolidation]` | Interval, min_facts threshold, max_group_size, dedup threshold, cluster_similarity_threshold (default 0.40) |
 | `[embedding]` | Dimensions, distance metric |
 | `[watcher]` | Watch path, poll interval, debounce, consolidate-after-ingest flag |
@@ -689,7 +701,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 | `[openclaw]` | OpenClaw memory backend mode (off/parallel/replace) |
 | `[hot]` | Hot phase (v0.5.0): enabled, ttl_minutes, tick_seconds, batch_size, embed_min_chars |
 | `[cool]` | Cool pipeline (v0.6.0): enabled, tick_seconds, silence_hours, max_cluster_size. Requires `[hot] enabled`. |
-| `[rerank]` | Optional post-merge reranking: top_n |
+| `[rerank]` | Post-merge reranking controls: top_n (works for both cosine default and provider rerank) |
 
 ### 7.2 Defaults
 

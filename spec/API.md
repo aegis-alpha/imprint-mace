@@ -10,6 +10,8 @@ Start with `imprint serve`. Default address: `127.0.0.1:8080`. Override with `--
 
 All responses are JSON with `Content-Type: application/json`. Errors return `{"error": "<message>"}` with an appropriate HTTP status code.
 
+If `[llm].base_url` is configured, Imprint runs in Prism mode: all chat/embedding/rerank backend calls route to one endpoint with task headers (`X-Prism-Task`, `X-Prism-App`) and direct `[[providers.*]]` chains are ignored.
+
 ### POST /ingest
 
 Behavior depends on config `[hot].enabled` and optional request field `mode`.
@@ -100,6 +102,8 @@ Ask a question against the knowledge base.
 | `citations` | array | Each object may include `fact_id`, `consolidation_id`, and/or `hot_message_id` |
 | `hot_message_id` | string | Raw message citation: `hot:<ULID>` or `cool:<ULID>` (matches Fresh Messages tags in the synthesis prompt) |
 | `facts_consulted` | number | Count of **structured facts** in the merged retrieval list passed to synthesis (excludes hot/cooldown raw rows) |
+
+**Reranking behavior:** Query always applies post-merge reranking on the structured-fact prefix selected by `[rerank].top_n`. Default reranker is local cosine rescoring (query embedding vs fact embedding, zero external calls). If `[[providers.reranker]]` is configured, the first entry is used as an HTTP rerank endpoint (`/v1/rerank`, with Cohere `/v2/rerank` compatibility); cosine remains the startup fallback when provider init fails.
 
 ### GET /status
 

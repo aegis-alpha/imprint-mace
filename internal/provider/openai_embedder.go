@@ -14,14 +14,16 @@ type OpenAIEmbedder struct {
 	baseURL string
 	model   string
 	apiKey  string
+	headers map[string]string
 	client  *http.Client
 }
 
-func NewOpenAIEmbedder(baseURL, model, apiKey string) *OpenAIEmbedder {
+func NewOpenAIEmbedder(baseURL, model, apiKey string, headers map[string]string) *OpenAIEmbedder {
 	return &OpenAIEmbedder{
 		baseURL: baseURL,
 		model:   model,
 		apiKey:  apiKey,
+		headers: headers,
 		client:  &http.Client{},
 	}
 }
@@ -42,7 +44,12 @@ func (e *OpenAIEmbedder) Embed(ctx context.Context, text string) ([]float32, err
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	if e.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	}
+	for k, v := range e.headers {
+		req.Header.Set(k, v)
+	}
 	if strings.Contains(e.baseURL, "openrouter.ai") {
 		req.Header.Set("HTTP-Referer", "https://github.com/aegis-alpha/imprint-MACE")
 		req.Header.Set("X-Title", "Imprint MACE")

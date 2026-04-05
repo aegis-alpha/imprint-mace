@@ -172,14 +172,15 @@ const (
 )
 
 type ProviderConfig struct {
-	Name           string  `json:"name" toml:"name"`
-	BaseURL        string  `json:"base_url" toml:"base_url"`
-	Model          string  `json:"model" toml:"model"`
-	APIKeyEnv      string  `json:"api_key_env" toml:"api_key_env"`
-	TokenEnv       string  `json:"token_env" toml:"token_env"`
-	TimeoutSeconds int     `json:"timeout_seconds" toml:"timeout_seconds"`
-	Priority       int     `json:"priority" toml:"priority"`
-	Temperature    float64 `json:"temperature" toml:"temperature"`
+	Name           string            `json:"name" toml:"name"`
+	BaseURL        string            `json:"base_url" toml:"base_url"`
+	Model          string            `json:"model" toml:"model"`
+	APIKeyEnv      string            `json:"api_key_env" toml:"api_key_env"`
+	TokenEnv       string            `json:"token_env" toml:"token_env"`
+	Headers        map[string]string `json:"headers,omitempty" toml:"headers,omitempty"`
+	TimeoutSeconds int               `json:"timeout_seconds" toml:"timeout_seconds"`
+	Priority       int               `json:"priority" toml:"priority"`
+	Temperature    float64           `json:"temperature" toml:"temperature"`
 }
 
 // --- Transcripts (D22) ---

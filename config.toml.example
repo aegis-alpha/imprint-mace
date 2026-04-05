@@ -14,6 +14,12 @@ dedup_similarity_threshold = 0.9
 dimensions = 1536          # 1536 for OpenAI text-embedding-3-small, 768 for nomic-embed-text
 distance_metric = "cosine" # cosine (default) or L2
 
+# Prism mode (single-endpoint routing for all tasks: extraction/query/consolidation/embedding/rerank)
+# When enabled, Imprint ignores [[providers.*]] chains and sends all task requests to this endpoint
+# with task headers: X-Prism-Task and X-Prism-App.
+# [llm]
+# base_url = "http://localhost:8089/v1"
+
 # --- Embedding providers ---
 # Same format as extraction providers. Used for generating fact embeddings.
 
@@ -193,16 +199,19 @@ priority = 2
 # silence_hours = 8          # Hours of silence before a cluster is considered complete
 # max_cluster_size = 50      # Max messages per cluster before forced extraction
 
-# Optional post-merge rerank (Cohere /v2/rerank). Only the first [[providers.reranker]] entry is used; extras are ignored (see server log warning).
+# Post-merge rerank controls.
 # top_n = 0 reranks the full merged fact prefix (still skips rerank if hot/cooldown rows lead the list).
+# Default reranker is cosine similarity (query embedding vs fact embedding, no external API).
+# Configure [[providers.reranker]] to use any HTTP rerank provider that supports /v1/rerank
+# (Cohere uses /v2/rerank and is handled automatically).
 # [rerank]
 # top_n = 15
 #
 # [[providers.reranker]]
-# name = "cohere"
-# base_url = "https://api.cohere.com"
+# name = "generic-reranker"
+# base_url = "https://your-reranker-endpoint.example.com"
 # model = "rerank-english-v3.0"
-# api_key_env = "COHERE_API_KEY"
+# api_key_env = "RERANK_API_KEY"
 # timeout_seconds = 45
 
 # Type taxonomy: the runtime source of truth for extraction prompts (D18).

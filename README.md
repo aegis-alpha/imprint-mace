@@ -109,7 +109,7 @@ Imprint watches transcript files, extracts facts, entities, and relationships, d
 - **Ingest (realtime):** text via API -> Engine.Ingest() -> same path
 - **Consolidation (background):** unconsolidated facts -> LLM grouping -> insights + fact connections
 - **Taxonomy evolution (background):** signals from extraction log -> LLM review -> validated proposals -> auto-apply
-- **Query:** question -> parallel retrieval (cold: vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph; when enabled: hot + cooldown vector/text) -> RRF or set-union merge -> optional post-merge rerank (fact prefix only) -> ReadContext enrichment from disk -> LLM synthesis -> answer with citations (`facts_consulted` counts structured facts only; raw messages may appear in Fresh Messages as `[hot:…]` / `[cool:…]`).
+- **Query:** question -> parallel retrieval (cold: vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph; when enabled: hot + cooldown vector/text) -> RRF or set-union merge -> post-merge rerank (cosine default, provider reranker optional; fact prefix only) -> ReadContext enrichment from disk -> LLM synthesis -> answer with citations (`facts_consulted` counts structured facts only; raw messages may appear in Fresh Messages as `[hot:…]` / `[cool:…]`).
 - **Hot phase (opt-in, `[hot]` in config):** HTTP/MCP ingest can store raw messages without extraction; TTL moves them to cooldown; query merge includes both layers. Use `mode: "extract"` on ingest to force the LLM extraction path while hot is enabled.
 
 ## Self-Improving Architecture
@@ -396,6 +396,22 @@ priority = 1
 
 Provider detection is automatic: `"anthropic"` routes to the Anthropic Messages API, `"ollama"` routes to the Ollama native API, everything else uses the OpenAI-compatible API (covers OpenAI, Google, OpenRouter, Voyage AI, Groq, Together, Fireworks, vLLM, llama.cpp, LM Studio, and any other OpenAI-compatible endpoint).
 
+### Prism Mode (Single Endpoint)
+
+If you run a routing proxy (for example Prism), you can route all tasks through one endpoint:
+
+```toml
+[llm]
+base_url = "http://localhost:8089/v1"
+```
+
+When `[llm].base_url` is set:
+- all chat/extraction/consolidation/query/embedding/rerank calls go to that endpoint
+- Imprint sends task headers on every request: `X-Prism-Task` and `X-Prism-App`
+- `[[providers.*]]` chains are ignored
+- provider health checks are skipped (managed by the proxy)
+- model name is fixed to `"auto"` and selected by the proxy
+
 ### Supported Providers
 
 | Provider | API | Free tier | Auth env var |
@@ -468,7 +484,7 @@ Run manually: `imprint optimize`. Runs automatically after `ingest-dir`, `watch`
 
 - **Knowledge extraction:** facts, entities, and relationships from any text via LLM, with semantic dedup and configurable type taxonomy
 - **Hot-Cool-Cold Pipeline (Phase 1 v0.5.0, Phase 2 v0.6.0):** realtime messages stored raw for instant search (zero LLM cost). TTL moves messages from hot to cooldown. Query searches all three phases (9 layers: hot vector, hot FTS5, cooldown vector, cooldown FTS5, fact vector, fact FTS5, chunk vector, chunk FTS5, graph). Hot messages appear in results as "Fresh Messages" alongside structured facts. Phase 2: Hybrid Union topic segmentation clusters cooldown messages per session, background goroutine extracts triggered clusters via Engine.Ingest(), transcript linking connects cooldown rows to batch-ingested transcripts and prevents duplicate extraction.
-- **Hybrid query:** 9 parallel retrieval layers when hot enabled (5 when disabled), RRF or set-union merge, optional post-merge reranking, ReadContext enrichment from source files, LLM synthesis with citations
+- **Hybrid query:** 9 parallel retrieval layers when hot enabled (5 when disabled), RRF or set-union merge, post-merge reranking (cosine default plus provider-agnostic HTTP reranker option), ReadContext enrichment from source files, LLM synthesis with citations
 - **Self-evolving taxonomy:** signal collection from extraction results, LLM review, validated proposals, auto-apply -- fully autonomous
 - **Platform integrations:** deterministic hooks for OpenClaw, Cursor, Claude Code, Gemini CLI. MCP server (8 tools) for any MCP client. HTTP API (9 main + 3 admin endpoints).
 - **Consolidation:** background grouping of related facts, connection discovery, higher-order insights
