@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+(No unreleased changes yet)
+
+## [0.5.0] - 2026-04-05
+
 ### Added
 
 - Hot-Cool Pipeline Phase 1: raw message storage with instant FTS5 + USearch HNSW search, zero LLM cost (BVP-352, BVP-353)
