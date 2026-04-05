@@ -59,7 +59,7 @@ jobs:
           CGO_CFLAGS: -I/usr/local/include
           CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
         run: |
-          go test -tags sqlite_fts5 -race -coverprofile=coverage.out ./...
+          go test -tags sqlite_fts5 -race -timeout 10m -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tail -1
 
       - name: Vet
