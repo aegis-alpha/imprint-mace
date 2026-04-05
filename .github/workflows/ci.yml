@@ -36,8 +36,8 @@ jobs:
           wget -q "https://github.com/unum-cloud/USearch/releases/download/v2.24.0/$ZIP"
           unzip -o "$ZIP"
           sudo mkdir -p /usr/local/lib /usr/local/include
-          sudo cp libusearch_c.dylib /usr/local/lib/
-          sudo cp usearch.h /usr/local/include/
+          sudo cp build_release/libusearch_c.dylib /usr/local/lib/
+          sudo cp c/usearch.h /usr/local/include/
           echo "CGO_LDFLAGS=-L/usr/local/lib -lusearch_c" >> "$GITHUB_ENV"
 
       - name: Lint
