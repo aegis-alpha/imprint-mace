@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -562,6 +563,130 @@ ttl_minutes = 120
 	}
 	if h.TickSeconds != 60 {
 		t.Errorf("expected default TickSeconds 60, got %d", h.TickSeconds)
+	}
+}
+
+func TestCoolConfig_Defaults(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 30
+priority = 1
+`
+	cfg := loadFromString(t, content)
+	if cfg.CoolEnabled() {
+		t.Error("expected cool disabled by default")
+	}
+	cc := cfg.EffectiveCoolConfig()
+	if *cc.Enabled {
+		t.Error("expected effective cool.enabled = false")
+	}
+	if cc.TickSeconds != 300 {
+		t.Errorf("expected default TickSeconds 300, got %d", cc.TickSeconds)
+	}
+	if cc.SilenceHours != 8 {
+		t.Errorf("expected default SilenceHours 8, got %d", cc.SilenceHours)
+	}
+	if cc.MaxClusterSize != 50 {
+		t.Errorf("expected default MaxClusterSize 50, got %d", cc.MaxClusterSize)
+	}
+}
+
+func TestCoolConfig_Explicit(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 30
+priority = 1
+
+[hot]
+enabled = true
+
+[cool]
+enabled = true
+tick_seconds = 120
+silence_hours = 4
+max_cluster_size = 25
+`
+	cfg := loadFromString(t, content)
+	if !cfg.CoolEnabled() {
+		t.Error("expected cool enabled")
+	}
+	cc := cfg.EffectiveCoolConfig()
+	if cc.TickSeconds != 120 {
+		t.Errorf("expected TickSeconds 120, got %d", cc.TickSeconds)
+	}
+	if cc.SilenceHours != 4 {
+		t.Errorf("expected SilenceHours 4, got %d", cc.SilenceHours)
+	}
+	if cc.MaxClusterSize != 25 {
+		t.Errorf("expected MaxClusterSize 25, got %d", cc.MaxClusterSize)
+	}
+}
+
+func TestCoolConfig_RequiresHot(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 30
+priority = 1
+
+[cool]
+enabled = true
+`
+	_, err := loadStringConfig(t, content)
+	if err == nil {
+		t.Fatal("expected error when cool.enabled without hot.enabled")
+	}
+	if !strings.Contains(err.Error(), "cool.enabled requires hot.enabled") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestCoolConfig_InvalidNegativeTickSeconds(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 30
+priority = 1
+
+[hot]
+enabled = true
+
+[cool]
+enabled = true
+tick_seconds = -1
+`
+	_, err := loadStringConfig(t, content)
+	if err == nil {
+		t.Fatal("expected error for negative cool.tick_seconds")
+	}
+	if !strings.Contains(err.Error(), "cool.tick_seconds") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

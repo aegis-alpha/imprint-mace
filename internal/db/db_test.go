@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,13 @@ import (
 
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 )
+
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
 
 func openTestDB(t *testing.T) *SQLiteStore {
 	t.Helper()
@@ -842,6 +850,7 @@ func TestSearchByVector_NilVectorIndex(t *testing.T) {
 
 func vecTestStore(t *testing.T, dims int) *SQLiteStore {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	store := openTestDB(t)
 	if err := store.AttachVectorIndex(dims); err != nil {
 		t.Fatalf("AttachVectorIndex: %v", err)
@@ -1343,6 +1352,7 @@ func TestSearchChunksByText_BM25Ranking(t *testing.T) {
 // --- Chunk embedding listing (BVP-216) ---
 
 func TestListChunksWithoutEmbedding(t *testing.T) {
+	skipIfUSearchBroken(t)
 	store := openTestDB(t)
 	if err := store.AttachVectorIndex(3); err != nil {
 		t.Fatalf("AttachVectorIndex: %v", err)
@@ -1374,6 +1384,7 @@ func TestListChunksWithoutEmbedding(t *testing.T) {
 }
 
 func TestListChunksByEmbeddingModel(t *testing.T) {
+	skipIfUSearchBroken(t)
 	store := openTestDB(t)
 	if err := store.AttachVectorIndex(3); err != nil {
 		t.Fatalf("AttachVectorIndex: %v", err)
@@ -1684,6 +1695,7 @@ func TestCreateAndListTranscriptChunks(t *testing.T) {
 }
 
 func TestUpdateChunkEmbeddingAndSearch(t *testing.T) {
+	skipIfUSearchBroken(t)
 	store := openTestDB(t)
 	if err := store.AttachVectorIndex(3); err != nil {
 		t.Fatalf("AttachVectorIndex: %v", err)

@@ -185,6 +185,13 @@ func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 
 func (m *mockEmbedder) ModelName() string { return "mock-embed" }
 
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
+
 func testEngineWithDedup(t *testing.T, sender *mockSender, embedder provider.Embedder, dims int, threshold float64) (*Engine, *db.SQLiteStore) {
 	t.Helper()
 	store, err := db.Open(t.TempDir() + "/test.db")
@@ -194,6 +201,7 @@ func testEngineWithDedup(t *testing.T, sender *mockSender, embedder provider.Emb
 	t.Cleanup(func() { store.Close() })
 
 	if dims > 0 {
+		skipIfUSearchBroken(t)
 		if err := store.AttachVectorIndex(dims); err != nil {
 			t.Fatalf("AttachVectorIndex: %v", err)
 		}

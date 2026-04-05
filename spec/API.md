@@ -159,7 +159,12 @@ Database statistics, wrapped with version info.
       "retry_count": 1
     }
   ],
-  "retry_queue_depth": 0
+  "retry_queue_depth": 0,
+  "cool_stats": {
+    "clusters_pending": 3,
+    "clusters_extracted": 12,
+    "messages_processed": 187
+  }
 }
 ```
 
@@ -172,6 +177,7 @@ Optional fields (omitted when empty):
 | `eval_scores` | object | At least one eval run recorded. `extraction`: composite score. `retrieval`: score = Recall@10, score2 = MRR. |
 | `providers` | array | Provider health entries exist. Each entry: provider_name, task_type, configured_model, active_model, status, last_error (if any), retry_count (if > 0). Status merged from provider_health + provider_ops. |
 | `retry_queue_depth` | int | Pending + processing entries in retry queue (omitted when 0). |
+| `cool_stats` | object | Cool pipeline stats when `[cool] enabled`: `clusters_pending` (unprocessed clusters), `clusters_extracted` (processed clusters), `messages_processed` (cooldown messages with processed_at set). Omitted when disabled or all counts are zero. |
 
 ### GET /context
 

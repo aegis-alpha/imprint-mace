@@ -6,7 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-(No unreleased changes yet)
+## [0.6.0] - 2026-04-05
+
+### Added
+
+- Cool Pipeline Phase 2: automatic extraction from cooldown messages via topic segmentation and background goroutine (BVP-355, BVP-356, BVP-357)
+- Hybrid Union topic segmentation: TreeSeg + TT+Merge boundary union algorithm in new `internal/segment/` package. Clusters cooldown messages per session into topically coherent groups. Parameters: TreeSeg lambda=0.001 K=7, TT+Merge window=3 threshold=0.5 min_size=5. Graceful degradation when embeddings unavailable (Jaccard text similarity fallback).
+- Cool extraction goroutine: background worker in new `internal/cooldown/` package. Polls for clusters ready for extraction on configurable tick interval. Two triggers: silence (8h, no new messages while other clusters active) and size (50 messages, safety valve). Formats cluster messages as `[speaker, YYYY-MM-DD HH:MM]: content` and calls `Engine.Ingest()`. Concurrency guard prevents double extraction.
+- Transcript linking: batch ingest now links cooldown rows to transcripts by `platform_session_id`. When batch produces facts, linked cooldown rows are marked as processed (prevents duplicate extraction by cool goroutine).
+- `CooldownMessage` type in `internal/model/types.go` with 14 fields (cluster_id, transcript_file, transcript_line, processed_at, moved_from_hot, etc.)
+- `ScoredCooldownMessage` type for cooldown search results (replaces `ScoredHotMessage` for cooldown queries)
+- Config: `[cool]` section (enabled, tick_seconds, silence_hours, max_cluster_size). Defaults: disabled, 300 sec tick, 8h silence, 50 max cluster. Validation: `[cool] enabled` requires `[hot] enabled`.
+- Migration 015: `platform_session_id` column + index on `transcripts` table
+- Store interface: 8 new methods (`ListCooldownUnclustered`, `AssignCooldownCluster`, `ListClustersReadyForExtraction`, `MarkClusterProcessed`, `LinkCooldownToTranscript`, `CoolPipelineStats`, `ListClusterMessages`, `MarkCooldownProcessedBySession`)
+- `CooldownCluster` and `CoolStats` types in Store
+- `GET /status` extended: `cool_stats` field with clusters_pending, clusters_extracted, messages_processed
+- `Transcript.PlatformSessionID` field persisted from frontmatter `session` key
+- 53 new tests across 5 packages (segment: 23, cooldown: 11, db: 12, config: 3, ingest: 4)
+- D37: context delivery disabled by default. `[context] enabled` is now a `*bool` (nil = disabled). `ContextEnabled()` returns false unless explicitly set to `true`. `createBuilder()` returns nil when disabled, skipping context injection in serve, watch, and MCP modes.
+- USearch SIGSEGV test guard: `IMPRINT_SKIP_USEARCH=1` env var skips USearch-dependent tests on platforms where the C library crashes (Apple Silicon M4 Max). CI (Linux) runs all tests.
+
+### Fixed
+
+- Hot FTS5 search: `SearchHotByText` used FTS5 alias `hf MATCH ?` which SQLite does not support. Fixed to `hot_messages_fts MATCH ?`.
+
+### Changed
+
+- `SearchCooldownByText` and `SearchCooldownByVector` now return `[]ScoredCooldownMessage` (was `[]ScoredHotMessage`). Cooldown search results now include cluster_id, transcript_file, transcript_line, processed_at fields.
+- `MarkClusterProcessed` returns `(int64, error)` (was `error`) for concurrency guard row count check
+- Query merge converts `CooldownMessage` to `HotMessage` via `cooldownToHot` helper for unified RRF ranking
+
+### Known Limitations (v0.6.0)
+
+- Transcript linking is one-directional: cooldown rows are linked only when batch ingest runs AFTER cooldown rows exist. Retroactive linking deferred to v0.6.1.
+- Segmentation without embeddings uses Jaccard text similarity as fallback (similarity 0.5 neutral for messages without embeddings)
+- Cool goroutine segmenter passes nil embeddings in current wiring (text-based segmentation only)
 
 ## [0.5.1] - 2026-04-05
 
@@ -175,6 +209,9 @@ Initial release.
 - CI: GitHub Actions (test on Ubuntu + macOS, Docker build on main, goreleaser on tag)
 - 232+ tests
 
+[0.6.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.6.0
+[0.5.1]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.5.1
+[0.5.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.5.0
 [0.4.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.4.0
 [0.3.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.3.0
 [0.2.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.2.0

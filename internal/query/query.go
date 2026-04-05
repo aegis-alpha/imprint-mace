@@ -90,8 +90,8 @@ type retrievalResult struct {
 	graphFacts       []model.Fact
 	hotByVector      []db.ScoredHotMessage
 	hotByText        []db.ScoredHotMessage
-	cooldownByVector []db.ScoredHotMessage
-	cooldownByText   []db.ScoredHotMessage
+	cooldownByVector []db.ScoredCooldownMessage
+	cooldownByText   []db.ScoredCooldownMessage
 }
 
 const hotRetrievalLimit = 10
@@ -640,13 +640,13 @@ func (q *Querier) mergeAndRank(r *retrievalResult) []rankedItem {
 		sm := &r.cooldownByVector[rank]
 		id := "cool:" + sm.Message.ID
 		scores[id] += 1.0 / (k + float64(rank+1))
-		hotMsgs[id] = sm.Message
+		hotMsgs[id] = cooldownToHot(&sm.Message)
 	}
 	for rank := range r.cooldownByText {
 		sm := &r.cooldownByText[rank]
 		id := "cool:" + sm.Message.ID
 		scores[id] += 1.0 / (k + float64(rank+1))
-		hotMsgs[id] = sm.Message
+		hotMsgs[id] = cooldownToHot(&sm.Message)
 	}
 
 	now := time.Now().UTC()
@@ -738,12 +738,27 @@ func (q *Querier) mergeSetUnion(r *retrievalResult) []rankedItem {
 		tryAddHot(r.hotByText[i].Message, "hot:")
 	}
 	for i := range r.cooldownByVector {
-		tryAddHot(r.cooldownByVector[i].Message, "cool:")
+		tryAddHot(cooldownToHot(&r.cooldownByVector[i].Message), "cool:")
 	}
 	for i := range r.cooldownByText {
-		tryAddHot(r.cooldownByText[i].Message, "cool:")
+		tryAddHot(cooldownToHot(&r.cooldownByText[i].Message), "cool:")
 	}
 	return out
+}
+
+// cooldownToHot converts a CooldownMessage to a HotMessage for merge/synthesis compatibility.
+func cooldownToHot(cm *model.CooldownMessage) model.HotMessage {
+	return model.HotMessage{
+		ID:                cm.ID,
+		Speaker:           cm.Speaker,
+		Content:           cm.Content,
+		Timestamp:         cm.Timestamp,
+		Platform:          cm.Platform,
+		PlatformSessionID: cm.PlatformSessionID,
+		LinkerRef:         cm.LinkerRef,
+		HasEmbedding:      cm.HasEmbedding,
+		CreatedAt:         cm.CreatedAt,
+	}
 }
 
 // sortRankedItemsByScore sorts ranked items in descending order by score (insertion sort, stable enough for typical N).

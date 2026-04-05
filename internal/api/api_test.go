@@ -31,8 +31,16 @@ func (m *mockSender) Send(_ context.Context, _ provider.Request) (*provider.Resp
 	return m.response, nil
 }
 
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
+
 func testAPI(t *testing.T) (*Handler, db.Store) {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -53,6 +61,7 @@ func testAPI(t *testing.T) (*Handler, db.Store) {
 
 func testAPIWithBuilder(t *testing.T) (*Handler, db.Store) {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -102,6 +111,47 @@ func TestStatus_ReturnsStats(t *testing.T) {
 	}
 	if resp.Version != "test" {
 		t.Errorf("expected version %q, got %q", "test", resp.Version)
+	}
+}
+
+func TestStatus_CoolStatsJSONUsesSnakeCase(t *testing.T) {
+	h, store := testAPI(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	hm := &model.HotMessage{
+		ID:                "cool-stat-1",
+		Speaker:           "user",
+		Content:           "hello",
+		Timestamp:         now,
+		PlatformSessionID: "sess-status",
+		HasEmbedding:      false,
+		CreatedAt:         now,
+	}
+	if err := store.InsertHotMessage(ctx, hm, nil); err != nil {
+		t.Fatal(err)
+	}
+	future := now.Add(time.Hour)
+	if _, err := store.MoveHotToCooldown(ctx, future, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AssignCooldownCluster(ctx, "clust-status", []string{"cool-stat-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/status", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"clusters_pending"`) {
+		t.Errorf("response should contain JSON key clusters_pending, body: %s", body)
+	}
+	if strings.Contains(body, `"ClustersPending"`) {
+		t.Errorf("response should not contain PascalCase ClustersPending, body: %s", body)
 	}
 }
 
@@ -474,6 +524,7 @@ func apiPromptPath(t *testing.T) string {
 
 func newHotIngestHTTPHandler(t *testing.T, dim int) (*Handler, *ingestHotSpy) {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	base, err := db.Open(t.TempDir() + "/hot-ingest.db")
 	if err != nil {
 		t.Fatal(err)
@@ -604,6 +655,7 @@ func TestIngestHot_MissingText(t *testing.T) {
 }
 
 func TestIngestHot_Disabled_ColdPath(t *testing.T) {
+	skipIfUSearchBroken(t)
 	base, err := db.Open(t.TempDir() + "/cold-ingest.db")
 	if err != nil {
 		t.Fatal(err)

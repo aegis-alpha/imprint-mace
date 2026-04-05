@@ -1,6 +1,8 @@
-# Hot Phase Implementation Specification (Phase 1, v0.5.0)
+# Hot-Cool Pipeline Implementation Specification (Phase 1 + Phase 2)
 
-Phase 1 of the Hot-Cool-Cold Pipeline. Messages stored raw, queryable immediately via FTS5 + USearch HNSW (D36). TTL moves messages from hot to cooldown. Both hot and cooldown are searchable -- messages never disappear from query results. Cool phase extraction (topic segmentation + LLM) is Phase 2.
+Phase 1 (v0.5.0): Messages stored raw, queryable immediately via FTS5 + USearch HNSW (D36). TTL moves messages from hot to cooldown. Both hot and cooldown are searchable -- messages never disappear from query results.
+
+Phase 2 (v0.6.0): Cool pipeline turns cooldown messages into structured cold knowledge. Hybrid Union topic segmentation clusters messages per session. Background goroutine extracts triggered clusters via `Engine.Ingest()`. Transcript linking connects cooldown rows to batch-ingested transcripts and prevents duplicate extraction.
 
 Linear tasks: BVP-352 (HCP-1), BVP-353 (HCP-2), BVP-358 partial (HCP-7).
 
@@ -426,9 +428,34 @@ type HotMessage struct {
 - **Speaker values:** `"user"` or `"assistant"`. Matches the convention used in transcript format (spec/TRANSCRIPT-FORMAT.md).
 - **Timestamp:** The original message time from the platform, not the DB insert time. `CreatedAt` is the DB insert time.
 
-### 3.3 CooldownMessage Type
+### 3.3 CooldownMessage Type (Phase 2, v0.6.0)
 
-Not needed for Phase 1. The cooldown_messages table exists but is only written to by `MoveHotToCooldown`. No code reads from it in Phase 1. When Phase 2 (cool phase extraction) is implemented, a `CooldownMessage` type will be added with the additional fields (cluster_id, transcript_file, transcript_line, processed_at, moved_from_hot).
+Added in Phase 2. Defined in `internal/model/types.go`:
+
+```go
+type CooldownMessage struct {
+    ID                string
+    Speaker           string
+    Content           string
+    Timestamp         time.Time
+    Platform          string
+    PlatformSessionID string
+    LinkerRef         string
+    HasEmbedding      bool
+    ClusterID         string
+    TranscriptFile    string
+    TranscriptLine    int
+    ProcessedAt       *time.Time
+    MovedFromHot      string
+    CreatedAt         time.Time
+}
+```
+
+Used by `SearchCooldownByText`, `SearchCooldownByVector` (return `[]ScoredCooldownMessage`), `ListCooldownUnclustered`, `ListClusterMessages`, and the cool extraction worker.
+
+### 3.4 Transcript PlatformSessionID (Phase 2, v0.6.0)
+
+The `Transcript` type gains a `PlatformSessionID` field, persisted from frontmatter `session` key. Migration 015 adds the column and index. Used by transcript linking to match cooldown rows to batch-ingested transcripts.
 
 ---
 
@@ -1351,6 +1378,94 @@ No hot search tests in Phase 1. Context builder is unchanged -- works with cold 
 
 ---
 
+## Phase 2: Cool Pipeline (v0.6.0)
+
+### 11. Migration 015
+
+**File:** `internal/db/migrations/015_phase2_cool_foundation.sql`
+
+```sql
+ALTER TABLE transcripts ADD COLUMN platform_session_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_transcripts_platform_session ON transcripts(platform_session_id);
+```
+
+### 12. Topic Segmentation (D32, R1-R4)
+
+**Package:** `internal/segment/`
+
+Hybrid Union algorithm combines two complementary approaches with boundary union:
+
+- **TreeSeg:** Hierarchical divisive clustering. lambda=0.001, K=7. Finds global structure via recursive variance-reduction splits.
+- **TT+Merge:** TextTiling with sliding window. window=3, threshold=0.5, min_size=5. Detects local topic shifts via similarity drops, merges small segments.
+- **Boundary union:** If either algorithm places a boundary, it is kept. Prefers over-segmentation (D32/R4).
+
+**Input:** `[]model.CooldownMessage` with optional embeddings. Messages without embeddings degrade to Jaccard text similarity (similarity 0.5 neutral fallback).
+
+**Output:** Map of `clusterID (ULID) -> []messageID`.
+
+**Invariant:** Clustering is per-session (`platform_session_id`). Cross-session clustering is a correctness bug.
+
+**Integration adapter:** `segment.ClusterUnclustered(ctx, store, sessionID, limit, embeddings, params)` loads unclustered messages, runs Hybrid Union, writes cluster assignments back.
+
+### 13. Cool Extraction Goroutine (R5-R10, R17)
+
+**Package:** `internal/cooldown/`
+
+Background worker started from `runServe` when `[cool] enabled = true`. Independent ticker at `[cool] tick_seconds` (default 300).
+
+**On each tick:**
+
+1. Call `store.ListClustersReadyForExtraction(silenceHours, maxClusterSize)` to find triggered clusters.
+2. For each cluster: load messages chronologically, format as `[speaker, YYYY-MM-DD HH:MM]: content`, call `engine.Ingest(ctx, text, "cooldown-cluster/<cluster_ulid>")`.
+3. On success: `store.MarkClusterProcessed(clusterID, time.Now())`. On failure: log, skip (retry next tick).
+
+**Triggers (D34):**
+
+- **Size:** cluster has >= `max_cluster_size` messages (default 50).
+- **Silence:** no new messages in cluster for `silence_hours` (default 8) AND at least one other cluster in the same session received a message more recently (relative silence, not absolute).
+
+**Concurrency guard:** `MarkClusterProcessed` returns affected row count. If 0, another tick already processed it -- skip.
+
+**Segmenter:** Accepts a `func(ctx, sessionID) error` parameter. In `main.go`, wired to `segment.ClusterUnclustered` with default params and nil embeddings.
+
+### 14. Transcript Linking (R11-R12)
+
+In `internal/ingest/batch.go`, after successful batch ingest of a transcript with `fm.Session != ""`:
+
+1. Call `store.LinkCooldownToTranscript(fm.Session, relPath)` to set `transcript_file` on matching cooldown rows.
+2. If batch produced facts (`totalFacts > 0`), call `store.MarkCooldownProcessedBySession(fm.Session)` to set `processed_at`. This prevents the cool goroutine from re-extracting content that batch already handled.
+
+**v0.6.0 limitation:** Linking only works when batch ingest runs AFTER cooldown rows exist. Retroactive linking deferred to v0.6.1.
+
+### 15. Configuration `[cool]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable cool pipeline. Requires `[hot] enabled = true`. |
+| `tick_seconds` | int | `300` | How often the cool goroutine checks for ready clusters. |
+| `silence_hours` | int | `8` | Hours of topic silence before extraction trigger. |
+| `max_cluster_size` | int | `50` | Messages per cluster before size trigger fires. |
+
+### 16. Observability (R17-R18)
+
+- Structured log lines for each trigger event (cluster ULID, trigger kind, message count, duration).
+- `GET /status` includes `cool_stats` field: `clusters_pending`, `clusters_extracted`, `messages_processed`.
+
+### 17. Store Methods (Phase 2)
+
+| Method | Purpose |
+|--------|---------|
+| `ListCooldownUnclustered(ctx, sessionID, limit)` | Unclustered cooldown messages for a session |
+| `AssignCooldownCluster(ctx, clusterID, messageIDs)` | Set cluster_id on messages (transaction) |
+| `ListClustersReadyForExtraction(ctx, silenceHours, maxClusterSize)` | Clusters meeting silence or size triggers |
+| `MarkClusterProcessed(ctx, clusterID, processedAt)` | Set processed_at, return affected count |
+| `LinkCooldownToTranscript(ctx, sessionID, transcriptFile)` | Set transcript_file on matching rows |
+| `CoolPipelineStats(ctx)` | Aggregate cool pipeline metrics |
+| `ListClusterMessages(ctx, clusterID)` | Load messages for a cluster chronologically |
+| `MarkCooldownProcessedBySession(ctx, sessionID)` | Mark linked rows as processed |
+
+---
+
 ## Design Decisions Summary
 
 
@@ -1362,6 +1477,9 @@ No hot search tests in Phase 1. Context builder is unchanged -- works with cold 
 | 4   | D27 replacement    | Hot phase replaces realtime path. Delete WithSessionID + SupersedeRealtimeBySession. | Hot phase solves the same problem (fresh data available before batch). Old mechanism produced temporary facts with 28% capture rate. Hot stores raw text at zero LLM cost. No temporary facts = no supersede needed. Dead code removed. |
 | 5   | Context format     | "Recent Messages" section before "Relevant Context" | Hot data is freshest. Separate section with different format (raw messages vs structured facts) makes the source clear.                              |
 | 6   | Vector search (D36) | USearch HNSW, single cache file, SQLite source of truth | sqlite-vec brute-force ~272ms at 200K -- over budget. USearch 1.1ms measured. One expendable cache file vs 4 vec0 tables. SQLite embedding column is source of truth. |
+| 7   | Separate cool goroutine | Independent ticker from hot TTL | Decouples trigger evaluation from TTL batching. Both started from `runServe`, same lifecycle. |
+| 8   | Per-session clustering | Hybrid Union runs within a single `platform_session_id` | Cross-session clustering is a correctness bug for linking and extraction context. |
+| 9   | Transcript linking direction | One-way: batch links existing cooldown rows | Retroactive linking (cooldown rows arriving after batch) deferred to v0.6.1. Simplifies v0.6.0 implementation. |
 
 
 ---

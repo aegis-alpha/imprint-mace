@@ -23,7 +23,9 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/config"
 	"github.com/aegis-alpha/imprint-mace/internal/consolidation"
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
+	"github.com/aegis-alpha/imprint-mace/internal/cooldown"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
+	"github.com/aegis-alpha/imprint-mace/internal/segment"
 	impeval "github.com/aegis-alpha/imprint-mace/internal/eval"
 	"github.com/aegis-alpha/imprint-mace/internal/extraction"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
@@ -381,6 +383,11 @@ func createQuerier(logger *slog.Logger, cfg *config.Config, store db.Store) *que
 }
 
 func createBuilder(cfg *config.Config, store db.Store, logger *slog.Logger) *impctx.Builder {
+	if !cfg.ContextEnabled() {
+		logger.Info("context delivery disabled (D37: [context] enabled = false)")
+		return nil
+	}
+
 	var embedder provider.Embedder
 	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
 	if err == nil && embChain != nil {
@@ -406,6 +413,10 @@ func runContext(logger *slog.Logger, cfgPath, hint string) {
 	defer store.Close()
 
 	builder := createBuilder(cfg, store, logger)
+	if builder == nil {
+		logger.Error("context delivery is disabled ([context] enabled = false). Set enabled = true in config to use this command.")
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	result, err := builder.Build(ctx, hint)
@@ -1037,9 +1048,29 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 			"tick_seconds", hotEffective.TickSeconds,
 			"batch_size", hotEffective.BatchSize)
 	}
+	var coolCancel context.CancelFunc
+	if cfg.CoolEnabled() {
+		coolCfg := cfg.EffectiveCoolConfig()
+		segParams := segment.DefaultParams()
+		segmenter := func(ctx context.Context, sessionID string) error {
+			_, err := segment.ClusterUnclustered(ctx, store, sessionID, 1000, nil, segParams)
+			return err
+		}
+		coolWorker := cooldown.NewWorker(store, eng, segmenter, coolCfg, logger)
+		coolCtx, cancel := context.WithCancel(context.Background())
+		coolCancel = cancel
+		go coolWorker.Run(coolCtx)
+		logger.Info("cool extraction worker started",
+			"tick_seconds", coolCfg.TickSeconds,
+			"silence_hours", coolCfg.SilenceHours,
+			"max_cluster_size", coolCfg.MaxClusterSize)
+	}
 	defer func() {
 		if hotCancel != nil {
 			hotCancel()
+		}
+		if coolCancel != nil {
+			coolCancel()
 		}
 	}()
 
@@ -1059,6 +1090,9 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		logger.Info("shutting down HTTP API server")
 		if hotCancel != nil {
 			hotCancel()
+		}
+		if coolCancel != nil {
+			coolCancel()
 		}
 		removeServeInfo()
 		ln.Close() //nolint:gosec // shutdown path; process exits immediately after

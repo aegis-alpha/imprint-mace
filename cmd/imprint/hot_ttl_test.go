@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,13 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/config"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 )
+
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
 
 type ttlMoveSpy struct {
 	*db.SQLiteStore
@@ -29,6 +37,7 @@ func (s *ttlMoveSpy) MoveHotToCooldown(ctx context.Context, olderThan time.Time,
 }
 
 func TestHotTTL_CallsMoveHotToCooldown(t *testing.T) {
+	skipIfUSearchBroken(t)
 	base, err := db.Open(t.TempDir() + "/ttl-spy.db")
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +75,7 @@ func TestHotTTL_CallsMoveHotToCooldown(t *testing.T) {
 }
 
 func TestHotTTL_GracefulShutdown(t *testing.T) {
+	skipIfUSearchBroken(t)
 	base, err := db.Open(t.TempDir() + "/ttl-shutdown.db")
 	if err != nil {
 		t.Fatal(err)

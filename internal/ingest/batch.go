@@ -101,6 +101,32 @@ func (b *BatchAdapter) ProcessDir(ctx context.Context, dir string) (*Result, err
 	return result, nil
 }
 
+// linkCooldownForSession links cooldown messages to a batch transcript path and marks them
+// processed when the batch run produced at least one fact (dedup with prior extraction).
+func (b *BatchAdapter) linkCooldownForSession(ctx context.Context, session, relPath string, totalFacts int) {
+	linked, err := b.store.LinkCooldownToTranscript(ctx, session, relPath)
+	if err != nil {
+		b.logger.Warn("failed to link cooldown to transcript",
+			"session", session, "error", err)
+		return
+	}
+	if linked == 0 {
+		return
+	}
+	b.logger.Info("linked cooldown rows to transcript",
+		"session", session, "transcript", relPath, "rows", linked)
+	if totalFacts > 0 {
+		marked, err := b.store.MarkCooldownProcessedBySession(ctx, session)
+		if err != nil {
+			b.logger.Warn("failed to mark cooldown processed",
+				"session", session, "error", err)
+		} else if marked > 0 {
+			b.logger.Info("marked cooldown rows as processed (batch extracted facts)",
+				"session", session, "rows", marked)
+		}
+	}
+}
+
 // processFile reads, hashes, dedup-checks, chunks, registers transcript, extracts, and stores.
 // Returns true if the file was processed, false if skipped (already ingested).
 func (b *BatchAdapter) processFile(ctx context.Context, dir, path string, result *Result) (bool, error) {
@@ -134,6 +160,9 @@ func (b *BatchAdapter) processFile(ctx context.Context, dir, path string, result
 		return false, fmt.Errorf("check ingested: %w", err)
 	}
 	if existing != nil && existing.ContentHash == hash {
+		if fm != nil && fm.Session != "" {
+			b.linkCooldownForSession(ctx, fm.Session, relPath, existing.FactsCount)
+		}
 		return false, nil
 	}
 
@@ -163,6 +192,7 @@ func (b *BatchAdapter) processFile(ctx context.Context, dir, path string, result
 			tr.Date = fm.Date
 			tr.Participants = fm.Participants
 			tr.Topic = fm.Topic
+			tr.PlatformSessionID = fm.Session
 		}
 		if err := b.store.CreateTranscript(ctx, tr); err != nil {
 			return false, fmt.Errorf("create transcript: %w", err)
@@ -211,6 +241,14 @@ func (b *BatchAdapter) processFile(ctx context.Context, dir, path string, result
 			b.logger.Info("superseded realtime facts for session",
 				"session", fm.Session, "count", superseded)
 		}
+	}
+
+	// Link cooldown rows to this transcript and mark as processed if batch
+	// produced facts. v0.6.0 limitation: linking only works when batch ingest
+	// runs AFTER cooldown rows exist for this session. If batch runs first and
+	// cooldown rows arrive later, they are not retroactively linked.
+	if fm != nil && fm.Session != "" {
+		b.linkCooldownForSession(ctx, fm.Session, relPath, totalFacts)
 	}
 
 	b.logger.Info("file ingested",

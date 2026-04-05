@@ -36,6 +36,13 @@ func (m *mockEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 
 func (m *mockEmbedder) ModelName() string { return "mock-embed" }
 
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
+
 // --- helpers ---
 
 func testQuerier(t *testing.T, sender *mockSender, embedder provider.Embedder) (*Querier, db.Store) {
@@ -50,6 +57,7 @@ func testQuerier(t *testing.T, sender *mockSender, embedder provider.Embedder) (
 		me := embedder.(*mockEmbedder)
 		dims := len(me.vec)
 		if dims > 0 {
+			skipIfUSearchBroken(t)
 			if err := store.AttachVectorIndex(dims); err != nil {
 				t.Fatalf("AttachVectorIndex: %v", err)
 			}
@@ -1196,8 +1204,8 @@ func TestBuildPrompt_FreshMessagesCooldownTag(t *testing.T) {
 func TestMergeAndRank_CooldownCitationPrefix(t *testing.T) {
 	q := New(nil, nil, nil, "", slog.Default())
 	r := &retrievalResult{
-		cooldownByText: []db.ScoredHotMessage{
-			{Message: model.HotMessage{ID: "c1", Speaker: "user", Content: "x", Timestamp: time.Now().UTC()}},
+		cooldownByText: []db.ScoredCooldownMessage{
+			{Message: model.CooldownMessage{ID: "c1", Speaker: "user", Content: "x", Timestamp: time.Now().UTC()}},
 		},
 	}
 	out := q.mergeAndRank(r)

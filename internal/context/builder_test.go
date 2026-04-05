@@ -3,6 +3,7 @@ package context
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,13 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 )
+
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
 
 type mockEmbedder struct {
 	vec []float32
@@ -25,6 +33,7 @@ func (m *mockEmbedder) ModelName() string { return "mock-embed" }
 
 func openTestStore(t *testing.T) *db.SQLiteStore {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	path := filepath.Join(t.TempDir(), "test.db")
 	store, err := db.Open(path)
 	if err != nil {

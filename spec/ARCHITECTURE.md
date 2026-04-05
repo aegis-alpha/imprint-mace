@@ -87,9 +87,9 @@ When `[hot] enabled = true` in config, `POST /ingest` and `imprint_ingest` store
 
 **Legacy:** Existing `realtime:*` facts in the database (from pre-v0.5.0 deployments) remain as historical data. No new `realtime:*` facts are created.
 
-### 1.7 Hot-Cool-Cold Pipeline (Phase 1: v0.5.0)
+### 1.7 Hot-Cool-Cold Pipeline (Phase 1: v0.5.0, Phase 2: v0.6.0)
 
-**Status: Phase 1 implemented (BVP-352, BVP-353, BVP-358).** Replaces per-message extraction (28% capture rate) with streaming storage + delayed topic-scoped extraction. Phase 2 (cool phase extraction) is designed but not yet implemented.
+**Status: Phase 1 + Phase 2 implemented (BVP-352, BVP-353, BVP-355, BVP-356, BVP-357, BVP-358).** Replaces per-message extraction (28% capture rate) with streaming storage + delayed topic-scoped extraction.
 
 Core insight: the original problem framing ("how to extract from a stream") was wrong. The right framing: "how to make raw messages queryable immediately, and extract with full context later."
 
@@ -97,7 +97,7 @@ Core insight: the original problem framing ("how to extract from a stream") was 
 Message arrives (from hook/API)
     |
     v
-[HOT PHASE] -- raw store, TTL ~1h, zero LLM cost [IMPLEMENTED]
+[HOT PHASE] -- raw store, TTL ~1h, zero LLM cost [IMPLEMENTED v0.5.0]
     |  1. Store raw message (speaker, content, timestamp, platform metadata, linker_ref)
     |  2. Selective embed (messages >= 50 chars get embedding)
     |  3. FTS5 index (hot_messages_fts)
@@ -106,13 +106,14 @@ Message arrives (from hook/API)
     |
     | (TTL expires, message copied to cooldown via background goroutine)
     v
-[COOL PHASE] -- topic clustering + extraction [DESIGNED, NOT YET IMPLEMENTED]
+[COOL PHASE] -- topic clustering + extraction [IMPLEMENTED v0.6.0]
     |  1. Messages accumulate in cooldown_messages table
     |  2. Hybrid Union topic segmentation (TreeSeg + TT+Merge, D32)
+    |     Per-session clustering via internal/segment/ package
     |  3. Cluster readiness: topic silence (8h) or cluster size (50 msgs)
-    |  4. Ready cluster -> format as 0GMem-style annotated block (D33)
-    |  5. Extraction LLM call with full topic context
-    |  6. Results -> Engine.Ingest() -> cold phase
+    |  4. Ready cluster -> format as [speaker, date time]: content
+    |  5. Extraction via Engine.Ingest() with source "cooldown-cluster/<ulid>"
+    |  6. Transcript linking: batch ingest links cooldown rows, marks processed
     |
     v
 [COLD PHASE] -- permanent store (existing infrastructure)
@@ -127,11 +128,13 @@ Message arrives (from hook/API)
 
 **Message linker (BVP-354):** `linker_ref` field connects messages to their reply targets. Set via `internal/ingest.ApplyHotLinkerRef` before insert. Heuristic: links to the latest prior hot row from the other speaker in the same `platform_session_id`. Used to connect confirmations ("yes") to the specific proposal they confirm.
 
-**Topic segmentation (D32, Phase 2):** Hybrid Union algorithm (TreeSeg + TT+Merge, boundary union). Determines WHEN to extract (cluster readiness) and WHICH messages form a block. Does NOT reorder messages -- extraction receives chronological order. Experiment showed topic-based reordering adds no extraction quality.
+**Topic segmentation (D32, implemented v0.6.0):** Hybrid Union algorithm (TreeSeg + TT+Merge, boundary union) in `internal/segment/`. Determines WHEN to extract (cluster readiness) and WHICH messages form a block. Does NOT reorder messages -- extraction receives chronological order. Experiment showed topic-based reordering adds no extraction quality. Clustering is per-session (`platform_session_id`); cross-session clustering is a correctness bug. Graceful degradation when embeddings unavailable (Jaccard text similarity fallback).
 
-**Annotation format (D33, Phase 2):** `[N] [Speaker] (date) (time) (->ref): content`. Linker (->ref) connects confirmations to proposals. Known facts NOT included in extraction prompt (paradoxical priming effect measured in E020).
+**Extraction format (implemented v0.6.0):** `[speaker, YYYY-MM-DD HH:MM]: content`. Known facts NOT included in extraction prompt (paradoxical priming effect measured in E020).
 
-**Triggers (D34, Phase 2):** Topic silence (8 hours, configurable) + cluster size (50 messages, safety valve). Session end rejected -- technical event, not semantic.
+**Triggers (D34, implemented v0.6.0):** Topic silence (8 hours, configurable via `[cool] silence_hours`) + cluster size (50 messages, configurable via `[cool] max_cluster_size`, safety valve). Session end rejected -- technical event, not semantic. Background goroutine in `internal/cooldown/` polls every `[cool] tick_seconds` (default 300).
+
+**Transcript linking (implemented v0.6.0):** Batch ingest links cooldown rows to transcripts by `platform_session_id`. When batch produces facts, linked cooldown rows are marked as processed (prevents duplicate extraction). v0.6.0 limitation: linking only works when batch runs after cooldown rows exist.
 
 **Query path (Phase 1):** Nine-layer search. Four new layers (hot vector, hot FTS5, cooldown vector, cooldown FTS5) added to existing five (fact vector, fact FTS5, chunk vector, chunk FTS5, graph). Hot and cooldown raw messages merged via RRF alongside structured facts. LLM synthesis includes "Fresh Messages" section for raw messages. Citations support `hot_message_id` field.
 
@@ -456,6 +459,15 @@ Two separate tables for performance: hot = realtime query (agent waits), cool = 
 
 Hot ingest linker (BVP-354): before insert, `internal/ingest.ApplyHotLinkerRef` can set `linker_ref` to the latest prior hot row from the other speaker (`user` / `assistant`) in the same `platform_session_id`. `Store` exposes `GetRecentHotMessages` and `GetLinkedMessages` for that heuristic and for walking `linker_ref` across hot and cooldown rows.
 
+**Cool Pipeline foundation (migration 015, BVP-355/356/357):**
+
+```sql
+ALTER TABLE transcripts ADD COLUMN platform_session_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_transcripts_platform_session ON transcripts(platform_session_id);
+```
+
+Enables transcript linking: batch ingest persists `platform_session_id` from frontmatter `session` key, then `LinkCooldownToTranscript` matches cooldown rows by session.
+
 ### 5.2 Vector Index (USearch HNSW, D36)
 
 Vector search uses USearch (C library + Go bindings) instead of sqlite-vec. Single `.vecindex` sidecar file next to the SQLite database.
@@ -676,6 +688,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 | `[health]` | Provider auto-healing: catalog_refresh_days, max_retries, retry_interval_hours, queue_ttl_hours |
 | `[openclaw]` | OpenClaw memory backend mode (off/parallel/replace) |
 | `[hot]` | Hot phase (v0.5.0): enabled, ttl_minutes, tick_seconds, batch_size, embed_min_chars |
+| `[cool]` | Cool pipeline (v0.6.0): enabled, tick_seconds, silence_hours, max_cluster_size. Requires `[hot] enabled`. |
 | `[rerank]` | Optional post-merge reranking: top_n |
 
 ### 7.2 Defaults

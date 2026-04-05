@@ -144,6 +144,7 @@ type statusResponse struct {
 	EvalScores      *evalScoresResponse      `json:"eval_scores,omitempty"`
 	Providers       []providerHealthResponse `json:"providers,omitempty"`
 	RetryQueueDepth int                      `json:"retry_queue_depth,omitempty"`
+	CoolStats       *db.CoolStats            `json:"cool_stats,omitempty"`
 }
 
 type providerHealthResponse struct {
@@ -260,6 +261,12 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	if depth, err := h.store.RetryQueueDepth(ctx); err == nil && depth > 0 {
 		resp.RetryQueueDepth = depth
+	}
+
+	if coolStats, err := h.store.CoolPipelineStats(ctx); err == nil && coolStats != nil {
+		if coolStats.ClustersPending > 0 || coolStats.ClustersExtracted > 0 || coolStats.MessagesProcessed > 0 {
+			resp.CoolStats = coolStats
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)

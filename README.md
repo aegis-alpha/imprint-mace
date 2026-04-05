@@ -28,7 +28,7 @@ AI agents forget everything between sessions. Every conversation starts from zer
 
 Imprint watches transcript files, extracts facts, entities, and relationships, discovers connections between them, and autonomously evolves its type taxonomy based on what it sees. Conversation transcripts on disk are the source of truth -- the database is a derived index. Every fact links back to the exact lines in the original file, so you can always verify, enrich, and cross-reference.
 
-**Hot phase (v0.5.0):** When hot phase is enabled, incoming messages are stored immediately for instant search -- no LLM extraction, no latency, no cost. Messages are queryable within milliseconds via FTS5 and USearch HNSW vector search. After a configurable TTL (default 60 minutes), messages move to cooldown where they remain searchable. The query pipeline searches all three phases (hot, cooldown, cold) simultaneously -- knowledge never disappears. Hot messages appear in query results as "Fresh Messages" alongside structured facts.
+**Hot-Cool-Cold Pipeline (v0.5.0 + v0.6.0):** When hot phase is enabled, incoming messages are stored immediately for instant search -- no LLM extraction, no latency, no cost. Messages are queryable within milliseconds via FTS5 and USearch HNSW vector search. After a configurable TTL (default 60 minutes), messages move to cooldown where they remain searchable. The cool pipeline (v0.6.0) automatically clusters cooldown messages by topic using Hybrid Union segmentation (TreeSeg + TT+Merge), then extracts triggered clusters through the standard Engine.Ingest() path. Batch transcript linking prevents duplicate extraction. The query pipeline searches all three phases (hot, cooldown, cold) simultaneously -- knowledge never disappears.
 
 ## Architecture
 
@@ -467,7 +467,7 @@ Run manually: `imprint optimize`. Runs automatically after `ingest-dir`, `watch`
 ### What works
 
 - **Knowledge extraction:** facts, entities, and relationships from any text via LLM, with semantic dedup and configurable type taxonomy
-- **Hot-Cool-Cold Pipeline (Phase 1, v0.5.0):** realtime messages stored raw for instant search (zero LLM cost). TTL moves messages from hot to cooldown. Query searches all three phases (9 layers: hot vector, hot FTS5, cooldown vector, cooldown FTS5, fact vector, fact FTS5, chunk vector, chunk FTS5, graph). Hot messages appear in results as "Fresh Messages" alongside structured facts. Phase 2 (cool phase extraction with topic segmentation) is designed but not yet implemented.
+- **Hot-Cool-Cold Pipeline (Phase 1 v0.5.0, Phase 2 v0.6.0):** realtime messages stored raw for instant search (zero LLM cost). TTL moves messages from hot to cooldown. Query searches all three phases (9 layers: hot vector, hot FTS5, cooldown vector, cooldown FTS5, fact vector, fact FTS5, chunk vector, chunk FTS5, graph). Hot messages appear in results as "Fresh Messages" alongside structured facts. Phase 2: Hybrid Union topic segmentation clusters cooldown messages per session, background goroutine extracts triggered clusters via Engine.Ingest(), transcript linking connects cooldown rows to batch-ingested transcripts and prevents duplicate extraction.
 - **Hybrid query:** 9 parallel retrieval layers when hot enabled (5 when disabled), RRF or set-union merge, optional post-merge reranking, ReadContext enrichment from source files, LLM synthesis with citations
 - **Self-evolving taxonomy:** signal collection from extraction results, LLM review, validated proposals, auto-apply -- fully autonomous
 - **Platform integrations:** deterministic hooks for OpenClaw, Cursor, Claude Code, Gemini CLI. MCP server (8 tools) for any MCP client. HTTP API (9 main + 3 admin endpoints).
@@ -512,7 +512,7 @@ Measured on commodity hardware (single-core SQLite, no tuning).
 | Transcripts as source of truth | DB is a derived index. Files on disk hold the full conversation. Facts back-reference file + line range. Query enriches from disk. |
 | Embedding model metadata | Each embedding stored with model name. On provider switch: selective re-embedding or adapter -- no full re-embedding needed. |
 | USearch sidecar index | Vector ANN lives in a `.vecindex` file next to the DB; dimensions come from config at runtime. Embeddings are also stored as BLOBs on rows for durability. 247x faster than sqlite-vec at 200K scale. |
-| Hot phase (opt-in) | Raw message storage with instant FTS5 + vector search (zero LLM cost). TTL moves messages to cooldown. Query searches hot + cooldown + cold simultaneously. Messages never disappear. Replaces D27 realtime extraction path. |
+| Hot-Cool Pipeline (opt-in) | Raw message storage with instant FTS5 + vector search (zero LLM cost). TTL moves messages to cooldown. Cool pipeline clusters by topic and extracts via Engine.Ingest(). Transcript linking prevents duplicate extraction. Query searches hot + cooldown + cold simultaneously. Messages never disappear. |
 
 ## Contributing
 

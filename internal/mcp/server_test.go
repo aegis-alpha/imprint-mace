@@ -32,6 +32,13 @@ func (m *mockSender) Send(_ context.Context, _ provider.Request) (*provider.Resp
 	return m.response, m.err
 }
 
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
+
 func promptPath(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -42,6 +49,7 @@ func promptPath(t *testing.T) string {
 
 func testServer(t *testing.T, sender *mockSender) *Server {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -67,6 +75,7 @@ func testServer(t *testing.T, sender *mockSender) *Server {
 
 func testStore(t *testing.T) (*Server, db.Store) {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -193,6 +202,7 @@ func (s *mcpHotSpy) InsertHotMessage(ctx context.Context, msg *model.HotMessage,
 
 func newHotMCPServer(t *testing.T, dim int) (*Server, *mcpHotSpy) {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	base, err := db.Open(t.TempDir() + "/mcp-hot.db")
 	if err != nil {
 		t.Fatal(err)
@@ -532,6 +542,7 @@ func (m *mockQuerySender) Send(_ context.Context, _ provider.Request) (*provider
 }
 
 func TestQueryTool_ReturnsAnswer(t *testing.T) {
+	skipIfUSearchBroken(t)
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -681,6 +692,7 @@ func TestQueryTool_MissingQuestion(t *testing.T) {
 
 func testStoreWithBuilder(t *testing.T) (*Server, db.Store) {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open db: %v", err)

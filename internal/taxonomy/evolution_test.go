@@ -346,8 +346,16 @@ func TestReviewTaxonomy_InvalidJSON_ReturnsNilNotError(t *testing.T) {
 
 // --- computeTypeCentroid ---
 
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
+
 func openTestDBWithVec(t *testing.T, dims int) (db.Store, *sql.DB) {
 	t.Helper()
+	skipIfUSearchBroken(t)
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("open test db: %v", err)

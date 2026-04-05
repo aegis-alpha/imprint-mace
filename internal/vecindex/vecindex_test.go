@@ -9,7 +9,15 @@ import (
 	"testing"
 )
 
+func skipIfUSearchBroken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("IMPRINT_SKIP_USEARCH") != "" {
+		t.Skip("IMPRINT_SKIP_USEARCH set -- USearch C library crashes on this platform")
+	}
+}
+
 func TestVectorIndex_Create(t *testing.T) {
+	skipIfUSearchBroken(t)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -28,6 +36,7 @@ func TestVectorIndex_Create(t *testing.T) {
 }
 
 func TestVectorIndex_AddAndSearch(t *testing.T) {
+	skipIfUSearchBroken(t)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -55,6 +64,7 @@ func TestVectorIndex_AddAndSearch(t *testing.T) {
 }
 
 func TestVectorIndex_PrefixFilter(t *testing.T) {
+	skipIfUSearchBroken(t)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -87,6 +97,7 @@ func TestVectorIndex_PrefixFilter(t *testing.T) {
 }
 
 func TestVectorIndex_Remove(t *testing.T) {
+	skipIfUSearchBroken(t)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -112,6 +123,7 @@ func TestVectorIndex_Remove(t *testing.T) {
 }
 
 func TestVectorIndex_SaveAndReload(t *testing.T) {
+	skipIfUSearchBroken(t)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -139,6 +151,7 @@ func TestVectorIndex_SaveAndReload(t *testing.T) {
 }
 
 func TestVectorIndex_RebuildFromSQLite(t *testing.T) {
+	skipIfUSearchBroken(t)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -162,6 +175,7 @@ func TestVectorIndex_RebuildFromSQLite(t *testing.T) {
 }
 
 func TestVectorIndex_ConcurrentReadWrite(t *testing.T) {
+	skipIfUSearchBroken(t)
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 

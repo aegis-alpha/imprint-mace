@@ -147,8 +147,8 @@ type Store interface {
 	ListHotMessages(ctx context.Context, filter HotMessageFilter) ([]model.HotMessage, error)
 	SearchHotByText(ctx context.Context, query string, limit int) ([]ScoredHotMessage, error)
 	SearchHotByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredHotMessage, error)
-	SearchCooldownByText(ctx context.Context, query string, limit int) ([]ScoredHotMessage, error)
-	SearchCooldownByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredHotMessage, error)
+	SearchCooldownByText(ctx context.Context, query string, limit int) ([]ScoredCooldownMessage, error)
+	SearchCooldownByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredCooldownMessage, error)
 	MoveHotToCooldown(ctx context.Context, olderThan time.Time, batchSize int) (moved int64, err error)
 	DeleteExpiredHot(ctx context.Context, olderThan time.Time) (int64, error)
 	CountHotMessages(ctx context.Context) (int, error)
@@ -157,6 +157,19 @@ type Store interface {
 	// GetLinkedMessages walks linker_ref from messageID through hot and cooldown rows.
 	// Returned order is chronological (oldest first); the requested message is last. Cycles stop traversal; a missing linker_ref target returns an error once at least one row was loaded.
 	GetLinkedMessages(ctx context.Context, messageID string) ([]model.HotMessage, error)
+
+	// Cool pipeline (Phase 2)
+	ListCooldownUnclustered(ctx context.Context, platformSessionID string, limit int) ([]model.CooldownMessage, error)
+	ListSessionsWithUnclusteredCooldown(ctx context.Context) ([]string, error)
+	AssignCooldownCluster(ctx context.Context, clusterID string, messageIDs []string) error
+	ListClustersReadyForExtraction(ctx context.Context, silenceHours int, maxClusterSize int) ([]CooldownCluster, error)
+	ListClusterMessages(ctx context.Context, clusterID string) ([]model.CooldownMessage, error)
+	MarkClusterProcessed(ctx context.Context, clusterID string, processedAt time.Time) (int64, error)
+	// ClearClusterProcessed resets processed_at for all messages in the cluster (rollback after failed ingest).
+	ClearClusterProcessed(ctx context.Context, clusterID string) (int64, error)
+	LinkCooldownToTranscript(ctx context.Context, platformSessionID, transcriptFile string) (int64, error)
+	MarkCooldownProcessedBySession(ctx context.Context, platformSessionID string) (int64, error)
+	CoolPipelineStats(ctx context.Context) (*CoolStats, error)
 
 	// Lifecycle
 	Close() error
@@ -192,6 +205,25 @@ type HotMessageFilter struct {
 type ScoredHotMessage struct {
 	Message model.HotMessage
 	Score   float64
+}
+
+type ScoredCooldownMessage struct {
+	Message model.CooldownMessage
+	Score   float64
+}
+
+type CooldownCluster struct {
+	ClusterID         string
+	PlatformSessionID string
+	MessageCount      int
+	LastMessageAt     time.Time
+	TriggerKind       string // "silence" or "size"
+}
+
+type CoolStats struct {
+	ClustersPending   int `json:"clusters_pending"`
+	ClustersExtracted int `json:"clusters_extracted"`
+	MessagesProcessed int `json:"messages_processed"`
 }
 
 type EntityGraph struct {

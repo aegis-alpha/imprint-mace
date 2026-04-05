@@ -25,6 +25,7 @@ type Config struct {
 	Health        HealthConfig        `toml:"health"`
 	OpenClaw      OpenClawConfig      `toml:"openclaw"`
 	Hot           HotConfig           `toml:"hot"`
+	Cool          CoolConfig          `toml:"cool"`
 	Rerank        RerankConfig        `toml:"rerank"`
 }
 
@@ -65,6 +66,38 @@ func (c *Config) EffectiveHotConfig() HotConfig {
 // HotEnabled reports whether the hot ingest path is active.
 func (c *Config) HotEnabled() bool {
 	return c.Hot.Enabled != nil && *c.Hot.Enabled
+}
+
+// CoolConfig controls the cool pipeline (Phase 2 clustering + extraction).
+type CoolConfig struct {
+	Enabled        *bool `toml:"enabled"`
+	TickSeconds    int   `toml:"tick_seconds"`
+	SilenceHours   int   `toml:"silence_hours"`
+	MaxClusterSize int   `toml:"max_cluster_size"`
+}
+
+// EffectiveCoolConfig returns cool settings with defaults applied.
+func (c *Config) EffectiveCoolConfig() CoolConfig {
+	cc := c.Cool
+	if cc.TickSeconds == 0 {
+		cc.TickSeconds = 300
+	}
+	if cc.SilenceHours == 0 {
+		cc.SilenceHours = 8
+	}
+	if cc.MaxClusterSize == 0 {
+		cc.MaxClusterSize = 50
+	}
+	if cc.Enabled == nil {
+		enabled := false
+		cc.Enabled = &enabled
+	}
+	return cc
+}
+
+// CoolEnabled reports whether the cool pipeline is active.
+func (c *Config) CoolEnabled() bool {
+	return c.Cool.Enabled != nil && *c.Cool.Enabled
 }
 
 type APIConfig struct {
@@ -173,9 +206,15 @@ type PromptPaths struct {
 }
 
 type ContextConfig struct {
+	Enabled            *bool `toml:"enabled"`
 	RecentHours        int   `toml:"recent_hours"`
 	MaxFacts           int   `toml:"max_facts"`
 	IncludePreferences *bool `toml:"include_preferences"`
+}
+
+// ContextEnabled reports whether the context delivery endpoint is active (D37: default false).
+func (c *Config) ContextEnabled() bool {
+	return c.Context.Enabled != nil && *c.Context.Enabled
 }
 
 func (c *Config) EffectiveContextConfig() ContextConfig {
@@ -378,6 +417,21 @@ func (c *Config) validate() error {
 	}
 	if c.DB.Path == "" {
 		return fmt.Errorf("db.path is required")
+	}
+	if c.CoolEnabled() && !c.HotEnabled() {
+		return fmt.Errorf("cool.enabled requires hot.enabled")
+	}
+	if c.CoolEnabled() {
+		ec := c.EffectiveCoolConfig()
+		if ec.TickSeconds <= 0 {
+			return fmt.Errorf("cool.tick_seconds must be > 0")
+		}
+		if ec.SilenceHours <= 0 {
+			return fmt.Errorf("cool.silence_hours must be > 0")
+		}
+		if ec.MaxClusterSize <= 0 {
+			return fmt.Errorf("cool.max_cluster_size must be > 0")
+		}
 	}
 	return nil
 }

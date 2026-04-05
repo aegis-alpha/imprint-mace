@@ -55,6 +55,12 @@ priority = 4
 host = "127.0.0.1"
 port = 8080
 
+# Context delivery (D37: disabled by default until context builder redesign).
+# When enabled, GET /context endpoint and MCP context resources are active.
+# When disabled, GET /context returns 404 and CLI `imprint context` exits with error.
+# [context]
+# enabled = false
+
 # Hot phase (opt-in): raw message ingest + TTL move to cooldown + hot/cooldown in query merge.
 # When enabled, POST /ingest and imprint_ingest store messages without LLM extraction unless mode = "extract".
 # [hot]
@@ -177,6 +183,15 @@ priority = 2
 # tick_seconds = 60         # TTL check interval
 # batch_size = 100          # Max messages moved per TTL tick
 # embed_min_chars = 50      # Min content length for embedding (E021: 50 chars, zero recall loss)
+
+# Cool pipeline (Phase 2: clustering + extraction from cooldown messages)
+# Requires hot.enabled = true. Groups cooldown messages into clusters by platform session,
+# triggers extraction when a cluster reaches max_cluster_size or goes silent for silence_hours.
+# [cool]
+# enabled = false
+# tick_seconds = 300         # How often the cool pipeline checks for ready clusters
+# silence_hours = 8          # Hours of silence before a cluster is considered complete
+# max_cluster_size = 50      # Max messages per cluster before forced extraction
 
 # Optional post-merge rerank (Cohere /v2/rerank). Only the first [[providers.reranker]] entry is used; extras are ignored (see server log warning).
 # top_n = 0 reranks the full merged fact prefix (still skips rerank if hot/cooldown rows lead the list).

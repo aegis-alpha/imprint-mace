@@ -1118,24 +1118,24 @@ func (s *SQLiteStore) UpdateTaxonomyProposalStatus(ctx context.Context, id, stat
 func (s *SQLiteStore) CreateTranscript(ctx context.Context, t *model.Transcript) error {
 	participantsJSON, _ := json.Marshal(t.Participants)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO transcripts (id, file_path, date, participants, topic, chunk_count, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO transcripts (id, file_path, date, participants, topic, platform_session_id, chunk_count, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.FilePath, timePtr(t.Date), string(participantsJSON),
-		nilIfEmpty(t.Topic), t.ChunkCount, timeStr(t.CreatedAt),
+		nilIfEmpty(t.Topic), nilIfEmpty(t.PlatformSessionID), t.ChunkCount, timeStr(t.CreatedAt),
 	)
 	return err
 }
 
 func (s *SQLiteStore) GetTranscript(ctx context.Context, id string) (*model.Transcript, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, file_path, date, participants, topic, chunk_count, created_at
+		SELECT id, file_path, date, participants, topic, platform_session_id, chunk_count, created_at
 		FROM transcripts WHERE id = ?`, id)
 	return scanTranscript(row)
 }
 
 func (s *SQLiteStore) GetTranscriptByPath(ctx context.Context, filePath string) (*model.Transcript, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, file_path, date, participants, topic, chunk_count, created_at
+		SELECT id, file_path, date, participants, topic, platform_session_id, chunk_count, created_at
 		FROM transcripts WHERE file_path = ?`, filePath)
 	tr, err := scanTranscript(row)
 	if err == sql.ErrNoRows {
@@ -1396,9 +1396,9 @@ func scanEntityRow(rows *sql.Rows) (*model.Entity, error) { return scanEntity(ro
 
 func scanTranscript(row scanner) (*model.Transcript, error) {
 	var t model.Transcript
-	var date, topic sql.NullString
+	var date, topic, platSess sql.NullString
 	var participantsJSON, createdAtStr string
-	err := row.Scan(&t.ID, &t.FilePath, &date, &participantsJSON, &topic, &t.ChunkCount, &createdAtStr)
+	err := row.Scan(&t.ID, &t.FilePath, &date, &participantsJSON, &topic, &platSess, &t.ChunkCount, &createdAtStr)
 	if err != nil {
 		return nil, err
 	}
@@ -1407,6 +1407,7 @@ func scanTranscript(row scanner) (*model.Transcript, error) {
 	}
 	t.Date = parseTimePtr(date)
 	t.Topic = topic.String
+	t.PlatformSessionID = platSess.String
 	if err := json.Unmarshal([]byte(participantsJSON), &t.Participants); err != nil {
 		return nil, fmt.Errorf("unmarshal transcript participants: %w", err)
 	}
@@ -2631,9 +2632,9 @@ func (s *SQLiteStore) SearchHotByText(ctx context.Context, query string, limit i
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT hm.id, hm.speaker, hm.content, hm.timestamp, hm.platform, hm.platform_session_id,
 			hm.linker_ref, hm.has_embedding, hm.created_at, bm25(hot_messages_fts) AS score
-		FROM hot_messages_fts hf
-		JOIN hot_messages hm ON hf.message_id = hm.id
-		WHERE hf MATCH ?
+		FROM hot_messages_fts
+		JOIN hot_messages hm ON hot_messages_fts.message_id = hm.id
+		WHERE hot_messages_fts MATCH ?
 		ORDER BY score
 		LIMIT ?`, sanitized, limit)
 	if err != nil {
@@ -2702,17 +2703,56 @@ func (s *SQLiteStore) SearchHotByVector(ctx context.Context, embedding []float32
 	return out, nil
 }
 
-func (s *SQLiteStore) SearchCooldownByText(ctx context.Context, query string, limit int) ([]ScoredHotMessage, error) {
+func scanCooldownMessage(row scanner) (*model.CooldownMessage, error) {
+	var m model.CooldownMessage
+	var tsStr, createdStr string
+	var platform, platSess, linker, clusterID, transcriptFile, processedAt, movedFrom sql.NullString
+	var hasEmb int64
+	var transcriptLine sql.NullInt64
+	if err := row.Scan(&m.ID, &m.Speaker, &m.Content, &tsStr,
+		&platform, &platSess, &linker, &hasEmb,
+		&clusterID, &transcriptFile, &transcriptLine, &processedAt,
+		&movedFrom, &createdStr); err != nil {
+		return nil, err
+	}
+	ts, err := time.Parse(time.RFC3339, tsStr)
+	if err != nil {
+		return nil, err
+	}
+	m.Timestamp = ts
+	ca, err := time.Parse(time.RFC3339, createdStr)
+	if err != nil {
+		return nil, err
+	}
+	m.CreatedAt = ca
+	m.Platform = platform.String
+	m.PlatformSessionID = platSess.String
+	m.LinkerRef = linker.String
+	m.HasEmbedding = hasEmb != 0
+	m.ClusterID = clusterID.String
+	m.TranscriptFile = transcriptFile.String
+	if transcriptLine.Valid {
+		m.TranscriptLine = int(transcriptLine.Int64)
+	}
+	m.ProcessedAt = parseTimePtr(processedAt)
+	m.MovedFromHot = movedFrom.String
+	return &m, nil
+}
+
+func (s *SQLiteStore) SearchCooldownByText(ctx context.Context, query string, limit int) ([]ScoredCooldownMessage, error) {
 	sanitized := fts.SanitizeQuery(strings.TrimSpace(query))
 	if sanitized == "" || limit <= 0 {
 		return nil, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT cm.id, cm.speaker, cm.content, cm.timestamp, cm.platform, cm.platform_session_id,
-			cm.linker_ref, cm.has_embedding, cm.created_at, bm25(cooldown_messages_fts) AS score
-		FROM cooldown_messages_fts cf
-		JOIN cooldown_messages cm ON cf.message_id = cm.id
-		WHERE cf MATCH ?
+			cm.linker_ref, cm.has_embedding,
+			cm.cluster_id, cm.transcript_file, cm.transcript_line, cm.processed_at,
+			cm.moved_from_hot, cm.created_at,
+			bm25(cooldown_messages_fts) AS score
+		FROM cooldown_messages_fts
+		JOIN cooldown_messages cm ON cooldown_messages_fts.message_id = cm.id
+		WHERE cooldown_messages_fts MATCH ?
 		ORDER BY score
 		LIMIT ?`, sanitized, limit)
 	if err != nil {
@@ -2721,15 +2761,18 @@ func (s *SQLiteStore) SearchCooldownByText(ctx context.Context, query string, li
 	}
 	defer rows.Close()
 
-	var out []ScoredHotMessage
+	var out []ScoredCooldownMessage
 	for rows.Next() {
 		var bm25score float64
-		var m model.HotMessage
+		var m model.CooldownMessage
 		var tsStr, createdStr string
-		var platform, platSess, linker sql.NullString
+		var platform, platSess, linker, clusterID, transcriptFile, processedAt, movedFrom sql.NullString
 		var hasEmb int64
+		var transcriptLine sql.NullInt64
 		if err := rows.Scan(&m.ID, &m.Speaker, &m.Content, &tsStr,
-			&platform, &platSess, &linker, &hasEmb, &createdStr, &bm25score); err != nil {
+			&platform, &platSess, &linker, &hasEmb,
+			&clusterID, &transcriptFile, &transcriptLine, &processedAt,
+			&movedFrom, &createdStr, &bm25score); err != nil {
 			return nil, err
 		}
 		ts, err := time.Parse(time.RFC3339, tsStr)
@@ -2746,12 +2789,19 @@ func (s *SQLiteStore) SearchCooldownByText(ctx context.Context, query string, li
 		m.PlatformSessionID = platSess.String
 		m.LinkerRef = linker.String
 		m.HasEmbedding = hasEmb != 0
-		out = append(out, ScoredHotMessage{Message: m, Score: -bm25score})
+		m.ClusterID = clusterID.String
+		m.TranscriptFile = transcriptFile.String
+		if transcriptLine.Valid {
+			m.TranscriptLine = int(transcriptLine.Int64)
+		}
+		m.ProcessedAt = parseTimePtr(processedAt)
+		m.MovedFromHot = movedFrom.String
+		out = append(out, ScoredCooldownMessage{Message: m, Score: -bm25score})
 	}
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) SearchCooldownByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredHotMessage, error) {
+func (s *SQLiteStore) SearchCooldownByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredCooldownMessage, error) {
 	if len(embedding) == 0 || limit <= 0 || s.vecIndex == nil {
 		return nil, nil
 	}
@@ -2760,23 +2810,26 @@ func (s *SQLiteStore) SearchCooldownByVector(ctx context.Context, embedding []fl
 	if err != nil {
 		return nil, fmt.Errorf("cooldown vector search: %w", err)
 	}
-	var out []ScoredHotMessage
+	var out []ScoredCooldownMessage
 	for _, h := range hits {
 		id := strings.TrimPrefix(h.ID, pref)
 		if id == h.ID {
 			continue
 		}
 		row := s.db.QueryRowContext(ctx, `
-			SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+			SELECT id, speaker, content, timestamp, platform, platform_session_id,
+				linker_ref, has_embedding,
+				cluster_id, transcript_file, transcript_line, processed_at,
+				moved_from_hot, created_at
 			FROM cooldown_messages WHERE id = ?`, id)
-		m, err := scanHotMessage(row)
+		m, err := scanCooldownMessage(row)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				continue
 			}
 			return nil, err
 		}
-		out = append(out, ScoredHotMessage{Message: *m, Score: 1 - h.Distance})
+		out = append(out, ScoredCooldownMessage{Message: *m, Score: 1 - h.Distance})
 	}
 	return out, nil
 }
@@ -2941,4 +2994,254 @@ func (s *SQLiteStore) CountHotMessages(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM hot_messages`).Scan(&n)
 	return n, err
+}
+
+// --- Cool pipeline (Phase 2) ---
+
+func (s *SQLiteStore) ListCooldownUnclustered(ctx context.Context, platformSessionID string, limit int) ([]model.CooldownMessage, error) {
+	if platformSessionID == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id,
+			linker_ref, has_embedding,
+			cluster_id, transcript_file, transcript_line, processed_at,
+			moved_from_hot, created_at
+		FROM cooldown_messages
+		WHERE platform_session_id = ? AND cluster_id IS NULL
+		ORDER BY timestamp ASC
+		LIMIT ?`, platformSessionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list unclustered: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.CooldownMessage
+	for rows.Next() {
+		m, err := scanCooldownMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) ListSessionsWithUnclusteredCooldown(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT platform_session_id
+		FROM cooldown_messages
+		WHERE platform_session_id IS NOT NULL AND TRIM(platform_session_id) != ''
+		AND cluster_id IS NULL
+		ORDER BY platform_session_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions with unclustered cooldown: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			return nil, err
+		}
+		out = append(out, sid)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) AssignCooldownCluster(ctx context.Context, clusterID string, messageIDs []string) error {
+	if clusterID == "" || len(messageIDs) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	placeholders := make([]string, len(messageIDs))
+	args := make([]any, 0, len(messageIDs)+1)
+	args = append(args, clusterID)
+	for i, id := range messageIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	q := fmt.Sprintf("UPDATE cooldown_messages SET cluster_id = ? WHERE cluster_id IS NULL AND id IN (%s)",
+		strings.Join(placeholders, ","))
+	if _, err := tx.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("assign cluster: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) ListClustersReadyForExtraction(ctx context.Context, silenceHours int, maxClusterSize int) ([]CooldownCluster, error) {
+	var out []CooldownCluster
+
+	// Size trigger: clusters with >= maxClusterSize messages
+	if maxClusterSize > 0 {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT cluster_id, platform_session_id, COUNT(*) AS cnt, MAX(timestamp) AS last_ts
+			FROM cooldown_messages
+			WHERE cluster_id IS NOT NULL AND processed_at IS NULL
+			GROUP BY cluster_id
+			HAVING cnt >= ?`, maxClusterSize)
+		if err != nil {
+			return nil, fmt.Errorf("size trigger query: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c CooldownCluster
+			var lastTS string
+			if err := rows.Scan(&c.ClusterID, &c.PlatformSessionID, &c.MessageCount, &lastTS); err != nil {
+				return nil, err
+			}
+			if t := parseTime(lastTS); t != nil {
+				c.LastMessageAt = *t
+			}
+			c.TriggerKind = "size"
+			out = append(out, c)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	sizeIDs := make(map[string]bool, len(out))
+	for _, c := range out {
+		sizeIDs[c.ClusterID] = true
+	}
+
+	// Silence trigger: cluster has no new messages for silenceHours AND at least
+	// one other cluster in the same session received a message more recently.
+	if silenceHours > 0 {
+		rows2, err := s.db.QueryContext(ctx, `
+			SELECT c.cluster_id, c.platform_session_id, c.cnt, c.last_ts
+			FROM (
+				SELECT cluster_id, platform_session_id, COUNT(*) AS cnt, MAX(timestamp) AS last_ts
+				FROM cooldown_messages
+				WHERE cluster_id IS NOT NULL AND processed_at IS NULL
+				GROUP BY cluster_id
+			) c
+			WHERE datetime(c.last_ts, '+' || ? || ' hours') < datetime('now')
+			AND EXISTS (
+				SELECT 1 FROM cooldown_messages o
+				WHERE o.platform_session_id = c.platform_session_id
+				AND o.cluster_id IS NOT NULL
+				AND o.cluster_id != c.cluster_id
+				AND o.timestamp > c.last_ts
+			)`, silenceHours)
+		if err != nil {
+			return nil, fmt.Errorf("silence trigger query: %w", err)
+		}
+		defer rows2.Close()
+		for rows2.Next() {
+			var c CooldownCluster
+			var lastTS string
+			if err := rows2.Scan(&c.ClusterID, &c.PlatformSessionID, &c.MessageCount, &lastTS); err != nil {
+				return nil, err
+			}
+			if sizeIDs[c.ClusterID] {
+				continue
+			}
+			if t := parseTime(lastTS); t != nil {
+				c.LastMessageAt = *t
+			}
+			c.TriggerKind = "silence"
+			out = append(out, c)
+		}
+		if err := rows2.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	return out, nil
+}
+
+func (s *SQLiteStore) ListClusterMessages(ctx context.Context, clusterID string) ([]model.CooldownMessage, error) {
+	if clusterID == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id,
+			linker_ref, has_embedding,
+			cluster_id, transcript_file, transcript_line, processed_at,
+			moved_from_hot, created_at
+		FROM cooldown_messages
+		WHERE cluster_id = ?
+		ORDER BY timestamp ASC`, clusterID)
+	if err != nil {
+		return nil, fmt.Errorf("list cluster messages: %w", err)
+	}
+	defer rows.Close()
+
+	var out []model.CooldownMessage
+	for rows.Next() {
+		m, err := scanCooldownMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) MarkClusterProcessed(ctx context.Context, clusterID string, processedAt time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE cooldown_messages SET processed_at = ? WHERE cluster_id = ? AND processed_at IS NULL`,
+		timeStr(processedAt), clusterID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *SQLiteStore) ClearClusterProcessed(ctx context.Context, clusterID string) (int64, error) {
+	if clusterID == "" {
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE cooldown_messages SET processed_at = NULL WHERE cluster_id = ?`,
+		clusterID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *SQLiteStore) LinkCooldownToTranscript(ctx context.Context, platformSessionID, transcriptFile string) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE cooldown_messages SET transcript_file = ?, transcript_line = 1
+		WHERE platform_session_id = ? AND processed_at IS NULL`,
+		transcriptFile, platformSessionID)
+	if err != nil {
+		return 0, fmt.Errorf("link cooldown to transcript: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+func (s *SQLiteStore) MarkCooldownProcessedBySession(ctx context.Context, platformSessionID string) (int64, error) {
+	now := timeStr(time.Now().UTC())
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE cooldown_messages SET processed_at = ?
+		WHERE platform_session_id = ? AND processed_at IS NULL AND transcript_file IS NOT NULL`,
+		now, platformSessionID)
+	if err != nil {
+		return 0, fmt.Errorf("mark cooldown processed by session: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+func (s *SQLiteStore) CoolPipelineStats(ctx context.Context) (*CoolStats, error) {
+	var stats CoolStats
+	err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(DISTINCT CASE WHEN cluster_id IS NOT NULL AND processed_at IS NULL THEN cluster_id END),
+			COUNT(DISTINCT CASE WHEN cluster_id IS NOT NULL AND processed_at IS NOT NULL THEN cluster_id END),
+			COUNT(CASE WHEN processed_at IS NOT NULL THEN 1 END)
+		FROM cooldown_messages`).Scan(&stats.ClustersPending, &stats.ClustersExtracted, &stats.MessagesProcessed)
+	if err != nil {
+		return nil, fmt.Errorf("cool pipeline stats: %w", err)
+	}
+	return &stats, nil
 }

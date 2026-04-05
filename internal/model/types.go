@@ -185,13 +185,14 @@ type ProviderConfig struct {
 // --- Transcripts (D22) ---
 
 type Transcript struct {
-	ID           string     `json:"id"`
-	FilePath     string     `json:"file_path"`
-	Date         *time.Time `json:"date,omitempty"`
-	Participants []string   `json:"participants,omitempty"`
-	Topic        string     `json:"topic,omitempty"`
-	ChunkCount   int        `json:"chunk_count"`
-	CreatedAt    time.Time  `json:"created_at"`
+	ID                string     `json:"id"`
+	FilePath          string     `json:"file_path"`
+	Date              *time.Time `json:"date,omitempty"`
+	Participants      []string   `json:"participants,omitempty"`
+	Topic             string     `json:"topic,omitempty"`
+	PlatformSessionID string     `json:"platform_session_id,omitempty"`
+	ChunkCount        int        `json:"chunk_count"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
 
 type TranscriptChunk struct {
@@ -216,4 +217,23 @@ type HotMessage struct {
 	LinkerRef         string    `json:"linker_ref,omitempty"`
 	HasEmbedding      bool      `json:"has_embedding"`
 	CreatedAt         time.Time `json:"created_at"`
+}
+
+// CooldownMessage is a message that has moved from hot to cooldown storage.
+// It carries additional fields for clustering, transcript linkage, and extraction tracking.
+type CooldownMessage struct {
+	ID                string     `json:"id"`
+	Speaker           string     `json:"speaker"`
+	Content           string     `json:"content"`
+	Timestamp         time.Time  `json:"timestamp"`
+	Platform          string     `json:"platform,omitempty"`
+	PlatformSessionID string     `json:"platform_session_id,omitempty"`
+	LinkerRef         string     `json:"linker_ref,omitempty"`
+	HasEmbedding      bool       `json:"has_embedding"`
+	ClusterID         string     `json:"cluster_id,omitempty"`
+	TranscriptFile    string     `json:"transcript_file,omitempty"`
+	TranscriptLine    int        `json:"transcript_line,omitempty"`
+	ProcessedAt       *time.Time `json:"processed_at,omitempty"`
+	MovedFromHot      string     `json:"moved_from_hot"`
+	CreatedAt         time.Time  `json:"created_at"`
 }
