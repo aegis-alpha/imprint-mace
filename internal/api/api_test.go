@@ -7,12 +7,17 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/aegis-alpha/imprint-mace/internal/config"
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
+	"github.com/aegis-alpha/imprint-mace/internal/extraction"
+	"github.com/aegis-alpha/imprint-mace/internal/imprint"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
@@ -32,11 +37,8 @@ func testAPI(t *testing.T) (*Handler, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("vec table: %v", err)
-	}
-	if err := store.EnsureChunkVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("chunk vec table: %v", err)
+	if err := store.AttachVectorIndex(4); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -55,11 +57,8 @@ func testAPIWithBuilder(t *testing.T) (*Handler, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("vec table: %v", err)
-	}
-	if err := store.EnsureChunkVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("chunk vec table: %v", err)
+	if err := store.AttachVectorIndex(4); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -424,6 +423,227 @@ func TestIngest_MissingText(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+// --- POST /ingest hot mode ---
+
+type ingestHotSpy struct {
+	db.Store
+	lastMsg   *model.HotMessage
+	lastEmb   []float32
+	insertErr error
+}
+
+func (s *ingestHotSpy) InsertHotMessage(ctx context.Context, msg *model.HotMessage, emb []float32) error {
+	cp := *msg
+	s.lastMsg = &cp
+	s.lastEmb = nil
+	if emb != nil {
+		s.lastEmb = append([]float32(nil), emb...)
+	}
+	if s.insertErr != nil {
+		return s.insertErr
+	}
+	return s.Store.InsertHotMessage(ctx, msg, emb)
+}
+
+type dimEmbedder struct {
+	n int
+}
+
+func (d dimEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
+	v := make([]float32, d.n)
+	for i := range v {
+		v[i] = 0.25
+	}
+	return v, nil
+}
+
+func (d dimEmbedder) ModelName() string { return "mock-dim" }
+
+func apiPromptPath(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "prompt.md")
+	if err := os.WriteFile(path, []byte("x\n## Fact Types ({{len .FactTypes}})\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func newHotIngestHTTPHandler(t *testing.T, dim int) (*Handler, *ingestHotSpy) {
+	t.Helper()
+	base, err := db.Open(t.TempDir() + "/hot-ingest.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.AttachVectorIndex(dim); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { base.Close() })
+	spy := &ingestHotSpy{Store: base}
+	sender := &mockSender{response: &provider.Response{
+		Content:      `{"facts":[],"entities":[],"relationships":[]}`,
+		ProviderName: "mock", Model: "test", TokensUsed: 1,
+	}}
+	q := query.New(spy, nil, sender, "", slog.Default())
+	h := NewHandler(nil, spy, q, "test", slog.Default())
+	h.SetHotEnabled(true)
+	return h, spy
+}
+
+func TestIngestHot_Basic(t *testing.T) {
+	h, spy := newHotIngestHTTPHandler(t, 8)
+	h.SetHotEmbedMinChars(50)
+	body := `{"text":"hello hot path minimum fifty charsxxxxxxxxxxxxxxxxxxxxxxxxxx","source":"realtime:sess-99"}`
+	req := httptest.NewRequest("POST", "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ID           string `json:"id"`
+		HasEmbedding bool   `json:"has_embedding"`
+		Hot          bool   `json:"hot"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Hot || resp.ID == "" {
+		t.Fatalf("response: %+v", resp)
+	}
+	if spy.lastMsg == nil || spy.lastMsg.PlatformSessionID != "sess-99" || spy.lastMsg.Platform != "unknown" {
+		t.Fatalf("stored message metadata wrong: %#v", spy.lastMsg)
+	}
+}
+
+func TestIngestHot_ShortContent(t *testing.T) {
+	h, spy := newHotIngestHTTPHandler(t, 8)
+	h.SetEmbedder(dimEmbedder{n: 8})
+	h.SetHotEmbedMinChars(50)
+	body := `{"text":"short"}`
+	req := httptest.NewRequest("POST", "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		HasEmbedding bool `json:"has_embedding"`
+		Hot          bool `json:"hot"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.HasEmbedding {
+		t.Error("expected no embedding for short text")
+	}
+	if len(spy.lastEmb) != 0 {
+		t.Error("expected nil embedding passed to store")
+	}
+}
+
+func TestIngestHot_LongContent_WithEmbedder(t *testing.T) {
+	h, spy := newHotIngestHTTPHandler(t, 8)
+	h.SetEmbedder(dimEmbedder{n: 8})
+	h.SetHotEmbedMinChars(50)
+	body := `{"text":"` + strings.Repeat("x", 55) + `"}`
+	req := httptest.NewRequest("POST", "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		HasEmbedding bool `json:"has_embedding"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if !resp.HasEmbedding {
+		t.Error("expected has_embedding true")
+	}
+	if len(spy.lastEmb) != 8 {
+		t.Errorf("expected 8-dim embedding, got %d", len(spy.lastEmb))
+	}
+}
+
+func TestIngestHot_NoEmbedder(t *testing.T) {
+	h, spy := newHotIngestHTTPHandler(t, 8)
+	h.SetHotEmbedMinChars(50)
+	body := `{"text":"` + strings.Repeat("y", 55) + `"}`
+	req := httptest.NewRequest("POST", "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		HasEmbedding bool `json:"has_embedding"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.HasEmbedding {
+		t.Error("expected has_embedding false without embedder")
+	}
+	if len(spy.lastEmb) != 0 {
+		t.Error("expected no embedding blob")
+	}
+}
+
+func TestIngestHot_MissingText(t *testing.T) {
+	h, _ := newHotIngestHTTPHandler(t, 8)
+	req := httptest.NewRequest("POST", "/ingest", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestIngestHot_Disabled_ColdPath(t *testing.T) {
+	base, err := db.Open(t.TempDir() + "/cold-ingest.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.AttachVectorIndex(8); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { base.Close() })
+	spy := &ingestHotSpy{Store: base}
+	sender := &mockSender{response: &provider.Response{
+		Content:      `{"facts":[],"entities":[],"relationships":[]}`,
+		ProviderName: "mock", Model: "test", TokensUsed: 1,
+	}}
+	ext, err := extraction.New(sender, apiPromptPath(t), config.DefaultTypes(), slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext.SetExtractionLogger(base)
+	eng := imprint.New(ext, base, nil, 0, 0, slog.Default())
+	q := query.New(spy, nil, sender, "", slog.Default())
+	h := NewHandler(eng, spy, q, "test", slog.Default())
+	h.SetHotEnabled(false)
+
+	body := `{"text":"some text for extraction path"}`
+	req := httptest.NewRequest("POST", "/ingest", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if spy.lastMsg != nil {
+		t.Fatal("InsertHotMessage should not run on cold ingest path")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["hot"]; ok {
+		t.Fatal("cold response should not include hot field")
 	}
 }
 

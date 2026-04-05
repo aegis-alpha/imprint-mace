@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -13,23 +15,26 @@ import (
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/aegis-alpha/imprint-mace/internal/fts"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
+	"github.com/aegis-alpha/imprint-mace/internal/vecindex"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
 type SQLiteStore struct {
-	db *sql.DB
+	db       *sql.DB
+	dbPath   string
+	vecIndex vecindex.VectorIndex
 }
 
 func Open(path string) (*SQLiteStore, error) {
-	sqlite_vec.Auto()
 	db, err := sql.Open("sqlite3", path+"?_journal_mode=wal&_foreign_keys=on")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	s := &SQLiteStore{db: db}
+	s := &SQLiteStore{db: db, dbPath: path}
 	if err := s.migrate(); err != nil {
 		db.Close() //nolint:gosec // best-effort cleanup on migration failure
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -38,7 +43,156 @@ func Open(path string) (*SQLiteStore, error) {
 }
 
 func (s *SQLiteStore) Close() error {
-	return s.db.Close()
+	var errs []error
+	if s.vecIndex != nil {
+		if err := s.vecIndex.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		s.vecIndex = nil
+	}
+	if err := s.db.Close(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// SetVectorIndex attaches a USearch (or nil) index for vector search and updates.
+func (s *SQLiteStore) SetVectorIndex(v vecindex.VectorIndex) {
+	s.vecIndex = v
+}
+
+// AttachVectorIndex opens the on-disk USearch cache next to this database.
+// No-op for :memory: or non-positive dimensions.
+func (s *SQLiteStore) AttachVectorIndex(dims int) error {
+	if dims <= 0 {
+		return nil
+	}
+	if s.dbPath == "" || s.dbPath == ":memory:" {
+		return nil
+	}
+	if s.vecIndex != nil {
+		return errors.New("db: vector index already attached")
+	}
+	cachePath := strings.TrimSuffix(s.dbPath, ".db") + ".vecindex"
+	vi, err := vecindex.OpenVectorIndex(cachePath, dims, func() (map[string][]float32, error) {
+		return s.CollectEmbeddingsForVectorIndex(context.Background())
+	})
+	if err != nil {
+		return err
+	}
+	s.vecIndex = vi
+	return nil
+}
+
+// CollectEmbeddingsForVectorIndex loads all embeddings from SQLite for USearch rebuild.
+func (s *SQLiteStore) CollectEmbeddingsForVectorIndex(ctx context.Context) (map[string][]float32, error) {
+	out := make(map[string][]float32)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, embedding FROM facts
+		WHERE embedding IS NOT NULL AND length(embedding) > 0`)
+	if err != nil {
+		return nil, fmt.Errorf("collect fact embeddings: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		v := blobToFloat32(blob)
+		if len(v) > 0 {
+			out["fact:"+id] = v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	rows2, err := s.db.QueryContext(ctx, `
+		SELECT id, embedding FROM transcript_chunks
+		WHERE embedding IS NOT NULL AND length(embedding) > 0`)
+	if err != nil {
+		return nil, fmt.Errorf("collect chunk embeddings: %w", err)
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var id string
+		var blob []byte
+		if err := rows2.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		v := blobToFloat32(blob)
+		if len(v) > 0 {
+			out["chunk:"+id] = v
+		}
+	}
+	if err := rows2.Err(); err != nil {
+		return nil, err
+	}
+
+	rows3, err := s.db.QueryContext(ctx, `
+		SELECT id, embedding FROM hot_messages
+		WHERE embedding IS NOT NULL AND length(embedding) > 0`)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return out, nil
+		}
+		return nil, fmt.Errorf("collect hot embeddings: %w", err)
+	}
+	defer rows3.Close()
+	for rows3.Next() {
+		var id string
+		var blob []byte
+		if err := rows3.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		v := blobToFloat32(blob)
+		if len(v) > 0 {
+			out["hot:"+id] = v
+		}
+	}
+	if err := rows3.Err(); err != nil {
+		return nil, err
+	}
+
+	rows4, err := s.db.QueryContext(ctx, `
+		SELECT id, embedding FROM cooldown_messages
+		WHERE embedding IS NOT NULL AND length(embedding) > 0`)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return out, nil
+		}
+		return nil, fmt.Errorf("collect cooldown embeddings: %w", err)
+	}
+	defer rows4.Close()
+	for rows4.Next() {
+		var id string
+		var blob []byte
+		if err := rows4.Scan(&id, &blob); err != nil {
+			return nil, err
+		}
+		v := blobToFloat32(blob)
+		if len(v) > 0 {
+			out["cool:"+id] = v
+		}
+	}
+	return out, rows4.Err()
+}
+
+// ReloadVectorIndex rebuilds the in-memory ANN index from SQLite (e.g. after admin reset).
+func (s *SQLiteStore) ReloadVectorIndex(ctx context.Context) error {
+	if s.vecIndex == nil {
+		return nil
+	}
+	m, err := s.CollectEmbeddingsForVectorIndex(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.vecIndex.ResetFromEmbeddings(m); err != nil {
+		return err
+	}
+	return s.vecIndex.Save()
 }
 
 // RawDB returns the underlying *sql.DB for aggregate queries that
@@ -48,6 +202,7 @@ func (s *SQLiteStore) RawDB() *sql.DB {
 }
 
 func (s *SQLiteStore) migrate() error {
+	sqlite_vec.Auto()
 	entries, err := migrations.ReadDir("migrations")
 	if err != nil {
 		return err
@@ -70,7 +225,48 @@ func (s *SQLiteStore) migrate() error {
 			}
 		}
 	}
+	if err := s.backfillChunkEmbeddingsIfNeeded(); err != nil {
+		return fmt.Errorf("backfill chunk embeddings: %w", err)
+	}
 	return nil
+}
+
+func (s *SQLiteStore) backfillChunkEmbeddingsIfNeeded() error {
+	ctx := context.Background()
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='chunks_vec'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT chunk_id, embedding FROM chunks_vec`)
+	if err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var chunkID string
+		var blob []byte
+		if err := rows.Scan(&chunkID, &blob); err != nil {
+			return err
+		}
+		vec := blobToFloat32(blob)
+		if len(vec) == 0 {
+			continue
+		}
+		emb := float32ToBlob(vec)
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE transcript_chunks SET embedding = ? WHERE id = ? AND embedding IS NULL`,
+			emb, chunkID); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func splitMigrationStatements(sql string) []string {
@@ -297,13 +493,12 @@ func (s *SQLiteStore) UpdateFactEmbedding(ctx context.Context, factID string, em
 	if err != nil {
 		return err
 	}
-	vecBlob, err := sqlite_vec.SerializeFloat32(embedding)
-	if err != nil {
-		return fmt.Errorf("serialize embedding: %w", err)
+	if s.vecIndex != nil {
+		if err := s.vecIndex.Add("fact:"+factID, embedding); err != nil {
+			return fmt.Errorf("vector index add fact: %w", err)
+		}
 	}
-	_, err = s.db.ExecContext(ctx,
-		"INSERT OR REPLACE INTO facts_vec(fact_id, embedding) VALUES (?, ?)", factID, vecBlob)
-	return err
+	return nil
 }
 
 func float32ToBlob(v []float32) []byte {
@@ -318,34 +513,12 @@ func float32ToBlob(v []float32) []byte {
 	return buf
 }
 
-// --- Vec table management (D23) ---
-
-func (s *SQLiteStore) EnsureVecTable(ctx context.Context, dims int) error {
-	var createSQL string
-	err := s.db.QueryRowContext(ctx,
-		"SELECT sql FROM sqlite_master WHERE type='table' AND name='facts_vec'").Scan(&createSQL)
-	if err == nil {
-		expected := fmt.Sprintf("float[%d]", dims)
-		if !strings.Contains(createSQL, expected) {
-			if _, err := s.db.ExecContext(ctx, "DROP TABLE facts_vec"); err != nil {
-				return fmt.Errorf("drop facts_vec with wrong dimensions: %w", err)
-			}
-		} else {
-			return nil
-		}
-	}
-	_, err = s.db.ExecContext(ctx, fmt.Sprintf(
-		"CREATE VIRTUAL TABLE IF NOT EXISTS facts_vec USING vec0(fact_id TEXT PRIMARY KEY, embedding float[%d] distance_metric=cosine)", dims))
-	return err
-}
-
 // --- Embeddings ---
 
 func (s *SQLiteStore) ListFactEmbeddings(ctx context.Context, factType string) ([][]float32, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT fv.embedding FROM facts f
-		JOIN facts_vec fv ON f.id = fv.fact_id
-		WHERE f.fact_type = ?`, factType)
+		SELECT f.embedding FROM facts f
+		WHERE f.fact_type = ? AND f.embedding IS NOT NULL AND length(f.embedding) > 0`, factType)
 	if err != nil {
 		return nil, fmt.Errorf("list fact embeddings: %w", err)
 	}
@@ -380,26 +553,19 @@ func blobToFloat32(b []byte) []float32 {
 // --- Search ---
 
 func (s *SQLiteStore) SearchByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredFact, error) {
-	vecBlob, err := sqlite_vec.SerializeFloat32(embedding)
-	if err != nil {
-		return nil, fmt.Errorf("serialize query embedding: %w", err)
+	if s.vecIndex == nil {
+		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT v.fact_id, v.distance
-		FROM facts_vec v
-		WHERE v.embedding MATCH ?
-		  AND k = ?`, vecBlob, limit)
+	const pref = "fact:"
+	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
-	defer rows.Close()
-
 	var results []ScoredFact
-	for rows.Next() {
-		var factID string
-		var distance float64
-		if err := rows.Scan(&factID, &distance); err != nil {
-			return nil, err
+	for _, h := range hits {
+		factID := strings.TrimPrefix(h.ID, pref)
+		if factID == h.ID {
+			continue
 		}
 		fact, err := s.GetFact(ctx, factID)
 		if err != nil {
@@ -407,10 +573,10 @@ func (s *SQLiteStore) SearchByVector(ctx context.Context, embedding []float32, l
 		}
 		results = append(results, ScoredFact{
 			Fact:  *fact,
-			Score: 1 - distance,
+			Score: 1 - h.Distance,
 		})
 	}
-	return results, rows.Err()
+	return results, nil
 }
 
 func (s *SQLiteStore) SearchByText(ctx context.Context, query string, limit int) ([]ScoredFact, error) {
@@ -1022,66 +1188,65 @@ func (s *SQLiteStore) ListTranscriptChunks(ctx context.Context, transcriptID str
 }
 
 func (s *SQLiteStore) DeleteTranscriptChunks(ctx context.Context, transcriptID string) error {
-	_, err := s.db.ExecContext(ctx,
-		"DELETE FROM transcript_chunks WHERE transcript_id = ?", transcriptID)
-	return err
-}
-
-func (s *SQLiteStore) EnsureChunkVecTable(ctx context.Context, dims int) error {
-	var createSQL string
-	err := s.db.QueryRowContext(ctx,
-		"SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks_vec'").Scan(&createSQL)
-	if err == nil {
-		expected := fmt.Sprintf("float[%d]", dims)
-		if !strings.Contains(createSQL, expected) {
-			if _, err := s.db.ExecContext(ctx, "DROP TABLE chunks_vec"); err != nil {
-				return fmt.Errorf("drop chunks_vec with wrong dimensions: %w", err)
-			}
-		} else {
-			return nil
-		}
-	}
-	_, err = s.db.ExecContext(ctx, fmt.Sprintf(
-		"CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[%d] distance_metric=cosine)", dims))
-	return err
-}
-
-func (s *SQLiteStore) UpdateChunkEmbedding(ctx context.Context, chunkID string, embedding []float32, modelName string) error {
-	_, err := s.db.ExecContext(ctx,
-		"UPDATE transcript_chunks SET embedding_model = ? WHERE id = ?", modelName, chunkID)
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id FROM transcript_chunks WHERE transcript_id = ?", transcriptID)
 	if err != nil {
 		return err
 	}
-	vecBlob, err := sqlite_vec.SerializeFloat32(embedding)
-	if err != nil {
-		return fmt.Errorf("serialize chunk embedding: %w", err)
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		ids = append(ids, id)
 	}
-	_, err = s.db.ExecContext(ctx,
-		"INSERT OR REPLACE INTO chunks_vec(chunk_id, embedding) VALUES (?, ?)", chunkID, vecBlob)
-	return err
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		"DELETE FROM transcript_chunks WHERE transcript_id = ?", transcriptID); err != nil {
+		return err
+	}
+	if s.vecIndex != nil {
+		const pref = "chunk:"
+		for _, id := range ids {
+			_ = s.vecIndex.Remove(pref + id) //nolint:errcheck // best-effort
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) UpdateChunkEmbedding(ctx context.Context, chunkID string, embedding []float32, modelName string) error {
+	blob := float32ToBlob(embedding)
+	_, err := s.db.ExecContext(ctx,
+		"UPDATE transcript_chunks SET embedding = ?, embedding_model = ? WHERE id = ?", blob, modelName, chunkID)
+	if err != nil {
+		return err
+	}
+	if s.vecIndex != nil {
+		if err := s.vecIndex.Add("chunk:"+chunkID, embedding); err != nil {
+			return fmt.Errorf("vector index add chunk: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *SQLiteStore) SearchChunksByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredChunk, error) {
-	vecBlob, err := sqlite_vec.SerializeFloat32(embedding)
-	if err != nil {
-		return nil, fmt.Errorf("serialize query embedding: %w", err)
+	if s.vecIndex == nil {
+		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT v.chunk_id, v.distance
-		FROM chunks_vec v
-		WHERE v.embedding MATCH ?
-		  AND k = ?`, vecBlob, limit)
+	const pref = "chunk:"
+	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
 	if err != nil {
 		return nil, fmt.Errorf("chunk vector search: %w", err)
 	}
-	defer rows.Close()
-
 	var results []ScoredChunk
-	for rows.Next() {
-		var chunkID string
-		var distance float64
-		if err := rows.Scan(&chunkID, &distance); err != nil {
-			return nil, err
+	for _, h := range hits {
+		chunkID := strings.TrimPrefix(h.ID, pref)
+		if chunkID == h.ID {
+			continue
 		}
 		row := s.db.QueryRowContext(ctx, `
 			SELECT id, transcript_id, line_start, line_end, content_hash, embedding_model
@@ -1094,10 +1259,10 @@ func (s *SQLiteStore) SearchChunksByVector(ctx context.Context, embedding []floa
 		c.EmbeddingModel = embModel.String
 		results = append(results, ScoredChunk{
 			Chunk: c,
-			Score: 1 - distance,
+			Score: 1 - h.Distance,
 		})
 	}
-	return results, rows.Err()
+	return results, nil
 }
 
 func (s *SQLiteStore) SearchChunksByText(ctx context.Context, query string, limit int) ([]ScoredChunk, error) {
@@ -1531,12 +1696,14 @@ func (s *SQLiteStore) DeleteExpiredFacts(ctx context.Context, olderThan time.Tim
 func (s *SQLiteStore) Reset(ctx context.Context) error {
 	tables := []string{
 		"facts_vec", "chunks_vec",
+		"hot_messages_fts", "cooldown_messages_fts",
 		"facts_fts", "transcript_chunks_fts",
 		"fact_connections", "relationships", "consolidations",
 		"taxonomy_signals", "taxonomy_proposals",
 		"extraction_log", "ingested_files", "query_log",
 		"quality_signals", "fact_citations", "eval_runs",
 		"provider_ops", "retry_queue", "provider_health", "provider_models",
+		"hot_messages", "cooldown_messages",
 		"transcript_chunks", "transcripts",
 		"facts", "entities",
 		"schema_migrations",
@@ -1550,6 +1717,24 @@ func (s *SQLiteStore) Reset(ctx context.Context) error {
 }
 
 func (s *SQLiteStore) DeleteFactsBySourcePattern(ctx context.Context, pattern string) (int64, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id FROM facts WHERE source_file LIKE ?", pattern)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	var factIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
+		factIDs = append(factIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin tx: %w", err)
@@ -1580,6 +1765,12 @@ func (s *SQLiteStore) DeleteFactsBySourcePattern(ctx context.Context, pattern st
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit: %w", err)
+	}
+	if s.vecIndex != nil {
+		const pref = "fact:"
+		for _, id := range factIDs {
+			_ = s.vecIndex.Remove(pref + id) //nolint:errcheck // best-effort
+		}
 	}
 	return n, nil
 }
@@ -1846,11 +2037,15 @@ func (s *SQLiteStore) CreateQueryLog(ctx context.Context, l *QueryLog) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO query_log (id, endpoint, question, total_latency_ms, retrieval_latency_ms,
 			synthesis_latency_ms, facts_found, facts_by_vector, facts_by_text, facts_by_graph,
-			chunks_by_vector, chunks_by_text, citations_count, embedder_available, error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			chunks_by_vector, chunks_by_text, hot_by_vector, hot_by_text,
+			cooldown_by_vector, cooldown_by_text,
+			citations_count, embedder_available, error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		l.ID, l.Endpoint, l.Question, l.TotalLatencyMs, l.RetrievalLatencyMs,
 		l.SynthesisLatencyMs, l.FactsFound, l.FactsByVector, l.FactsByText, l.FactsByGraph,
-		l.ChunksByVector, l.ChunksByText, l.CitationsCount, embedder, nilIfEmpty(l.Error),
+		l.ChunksByVector, l.ChunksByText, l.HotByVector, l.HotByText,
+		l.CooldownByVector, l.CooldownByText,
+		l.CitationsCount, embedder, nilIfEmpty(l.Error),
 		timeStr(l.CreatedAt),
 	)
 	return err
@@ -1859,7 +2054,9 @@ func (s *SQLiteStore) CreateQueryLog(ctx context.Context, l *QueryLog) error {
 func (s *SQLiteStore) ListQueryLogs(ctx context.Context, limit int) ([]QueryLog, error) {
 	q := `SELECT id, endpoint, question, total_latency_ms, retrieval_latency_ms,
 		synthesis_latency_ms, facts_found, facts_by_vector, facts_by_text, facts_by_graph,
-		chunks_by_vector, chunks_by_text, citations_count, embedder_available, error, created_at
+		chunks_by_vector, chunks_by_text, hot_by_vector, hot_by_text,
+		cooldown_by_vector, cooldown_by_text,
+		citations_count, embedder_available, error, created_at
 		FROM query_log ORDER BY created_at DESC`
 	if limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", limit)
@@ -1879,7 +2076,9 @@ func (s *SQLiteStore) ListQueryLogs(ctx context.Context, limit int) ([]QueryLog,
 		if err := rows.Scan(&l.ID, &l.Endpoint, &l.Question, &l.TotalLatencyMs,
 			&l.RetrievalLatencyMs, &l.SynthesisLatencyMs, &l.FactsFound,
 			&l.FactsByVector, &l.FactsByText, &l.FactsByGraph,
-			&l.ChunksByVector, &l.ChunksByText, &l.CitationsCount,
+			&l.ChunksByVector, &l.ChunksByText,
+			&l.HotByVector, &l.HotByText, &l.CooldownByVector, &l.CooldownByText,
+			&l.CitationsCount,
 			&embedder, &errStr, &createdAtStr); err != nil {
 			return nil, err
 		}
@@ -2207,7 +2406,9 @@ func (s *SQLiteStore) Stats(ctx context.Context) (*DBStats, error) {
 			(SELECT COUNT(*) FROM entities),
 			(SELECT COUNT(*) FROM relationships),
 			(SELECT COUNT(*) FROM consolidations),
-			(SELECT COUNT(*) FROM ingested_files)
+			(SELECT COUNT(*) FROM ingested_files),
+			(SELECT COUNT(*) FROM hot_messages),
+			(SELECT COUNT(*) FROM cooldown_messages)
 	`)
 	if err := row.Scan(
 		&stats.Facts,
@@ -2215,8 +2416,523 @@ func (s *SQLiteStore) Stats(ctx context.Context) (*DBStats, error) {
 		&stats.Relationships,
 		&stats.Consolidations,
 		&stats.IngestedFiles,
+		&stats.HotMessages,
+		&stats.CooldownMessages,
 	); err != nil {
 		return nil, fmt.Errorf("stats: %w", err)
 	}
 	return &stats, nil
+}
+
+// --- Hot / cooldown pipeline (BVP-352) ---
+
+func scanHotMessage(row scanner) (*model.HotMessage, error) {
+	var m model.HotMessage
+	var tsStr, createdStr string
+	var platform, platSess, linker sql.NullString
+	var hasEmb int64
+	if err := row.Scan(&m.ID, &m.Speaker, &m.Content, &tsStr,
+		&platform, &platSess, &linker, &hasEmb, &createdStr); err != nil {
+		return nil, err
+	}
+	ts, err := time.Parse(time.RFC3339, tsStr)
+	if err != nil {
+		return nil, err
+	}
+	m.Timestamp = ts
+	ca, err := time.Parse(time.RFC3339, createdStr)
+	if err != nil {
+		return nil, err
+	}
+	m.CreatedAt = ca
+	m.Platform = platform.String
+	m.PlatformSessionID = platSess.String
+	m.LinkerRef = linker.String
+	m.HasEmbedding = hasEmb != 0
+	return &m, nil
+}
+
+func (s *SQLiteStore) GetRecentHotMessages(ctx context.Context, platformSessionID string, limit int) ([]model.HotMessage, error) {
+	if platformSessionID == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+		FROM hot_messages
+		WHERE platform_session_id = ?
+		ORDER BY timestamp DESC, created_at DESC, id DESC
+		LIMIT ?`, platformSessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.HotMessage
+	for rows.Next() {
+		m, err := scanHotMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+// getHotOrCooldownMessage loads a message by id from hot_messages, then cooldown_messages.
+func (s *SQLiteStore) getHotOrCooldownMessage(ctx context.Context, id string) (*model.HotMessage, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+		FROM hot_messages WHERE id = ?`, id)
+	m, err := scanHotMessage(row)
+	if err == nil {
+		return m, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	row2 := s.db.QueryRowContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+		FROM cooldown_messages WHERE id = ?`, id)
+	return scanHotMessage(row2)
+}
+
+const maxLinkerChainHops = 10000
+
+func (s *SQLiteStore) GetLinkedMessages(ctx context.Context, messageID string) ([]model.HotMessage, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return nil, fmt.Errorf("db: empty message id")
+	}
+	seen := make(map[string]struct{})
+	var rev []model.HotMessage
+	currID := messageID
+	for currID != "" && len(rev) < maxLinkerChainHops {
+		if _, dup := seen[currID]; dup {
+			break
+		}
+		seen[currID] = struct{}{}
+		m, err := s.getHotOrCooldownMessage(ctx, currID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				if len(rev) == 0 {
+					return nil, ErrNotFound
+				}
+				return nil, fmt.Errorf("db: linker_ref target not found: %q", currID)
+			}
+			return nil, err
+		}
+		rev = append(rev, *m)
+		currID = strings.TrimSpace(m.LinkerRef)
+	}
+	for i, j := 0, len(rev)-1; i < j; i, j = i+1, j-1 {
+		rev[i], rev[j] = rev[j], rev[i]
+	}
+	return rev, nil
+}
+
+func (s *SQLiteStore) InsertHotMessage(ctx context.Context, msg *model.HotMessage, embedding []float32) error {
+	if msg == nil {
+		return errors.New("db: nil hot message")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	hasEmb := int64(0)
+	if msg.HasEmbedding {
+		hasEmb = 1
+	}
+	var embBlob any
+	if len(embedding) > 0 {
+		embBlob = float32ToBlob(embedding)
+	} else {
+		embBlob = nil
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO hot_messages (id, speaker, content, timestamp, platform, platform_session_id,
+			linker_ref, has_embedding, created_at, embedding)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		msg.ID, msg.Speaker, msg.Content, msg.Timestamp.UTC().Format(time.RFC3339),
+		nilIfEmpty(msg.Platform), nilIfEmpty(msg.PlatformSessionID), nilIfEmpty(msg.LinkerRef),
+		hasEmb, msg.CreatedAt.UTC().Format(time.RFC3339), embBlob)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO hot_messages_fts (content, message_id) VALUES (?, ?)`,
+		msg.Content, msg.ID,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if len(embedding) > 0 && s.vecIndex != nil {
+		if err := s.vecIndex.Add("hot:"+msg.ID, embedding); err != nil {
+			return fmt.Errorf("vector index add hot: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ListHotMessages(ctx context.Context, filter HotMessageFilter) ([]model.HotMessage, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	q := `SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+		FROM hot_messages WHERE 1=1`
+	var args []any
+	if filter.PlatformSessionID != "" {
+		q += " AND platform_session_id = ?"
+		args = append(args, filter.PlatformSessionID)
+	}
+	if filter.After != nil {
+		q += " AND timestamp > ?"
+		args = append(args, filter.After.UTC().Format(time.RFC3339))
+	}
+	if filter.Before != nil {
+		q += " AND timestamp < ?"
+		args = append(args, filter.Before.UTC().Format(time.RFC3339))
+	}
+	q += " ORDER BY timestamp ASC"
+	q += fmt.Sprintf(" LIMIT %d", limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.HotMessage
+	for rows.Next() {
+		m, err := scanHotMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) SearchHotByText(ctx context.Context, query string, limit int) ([]ScoredHotMessage, error) {
+	sanitized := fts.SanitizeQuery(strings.TrimSpace(query))
+	if sanitized == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT hm.id, hm.speaker, hm.content, hm.timestamp, hm.platform, hm.platform_session_id,
+			hm.linker_ref, hm.has_embedding, hm.created_at, bm25(hot_messages_fts) AS score
+		FROM hot_messages_fts hf
+		JOIN hot_messages hm ON hf.message_id = hm.id
+		WHERE hf MATCH ?
+		ORDER BY score
+		LIMIT ?`, sanitized, limit)
+	if err != nil {
+		log.Printf("db: hot FTS5 search: %v", err)
+		return nil, nil
+	}
+	defer rows.Close()
+
+	var out []ScoredHotMessage
+	for rows.Next() {
+		var bm25score float64
+		var m model.HotMessage
+		var tsStr, createdStr string
+		var platform, platSess, linker sql.NullString
+		var hasEmb int64
+		if err := rows.Scan(&m.ID, &m.Speaker, &m.Content, &tsStr,
+			&platform, &platSess, &linker, &hasEmb, &createdStr, &bm25score); err != nil {
+			return nil, err
+		}
+		ts, err := time.Parse(time.RFC3339, tsStr)
+		if err != nil {
+			continue
+		}
+		ca, err := time.Parse(time.RFC3339, createdStr)
+		if err != nil {
+			continue
+		}
+		m.Timestamp = ts
+		m.CreatedAt = ca
+		m.Platform = platform.String
+		m.PlatformSessionID = platSess.String
+		m.LinkerRef = linker.String
+		m.HasEmbedding = hasEmb != 0
+		out = append(out, ScoredHotMessage{Message: m, Score: -bm25score})
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) SearchHotByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredHotMessage, error) {
+	if len(embedding) == 0 || limit <= 0 || s.vecIndex == nil {
+		return nil, nil
+	}
+	const pref = "hot:"
+	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
+	if err != nil {
+		return nil, fmt.Errorf("hot vector search: %w", err)
+	}
+	var out []ScoredHotMessage
+	for _, h := range hits {
+		id := strings.TrimPrefix(h.ID, pref)
+		if id == h.ID {
+			continue
+		}
+		row := s.db.QueryRowContext(ctx, `
+			SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+			FROM hot_messages WHERE id = ?`, id)
+		m, err := scanHotMessage(row)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, ScoredHotMessage{Message: *m, Score: 1 - h.Distance})
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) SearchCooldownByText(ctx context.Context, query string, limit int) ([]ScoredHotMessage, error) {
+	sanitized := fts.SanitizeQuery(strings.TrimSpace(query))
+	if sanitized == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT cm.id, cm.speaker, cm.content, cm.timestamp, cm.platform, cm.platform_session_id,
+			cm.linker_ref, cm.has_embedding, cm.created_at, bm25(cooldown_messages_fts) AS score
+		FROM cooldown_messages_fts cf
+		JOIN cooldown_messages cm ON cf.message_id = cm.id
+		WHERE cf MATCH ?
+		ORDER BY score
+		LIMIT ?`, sanitized, limit)
+	if err != nil {
+		log.Printf("db: cooldown FTS5 search: %v", err)
+		return nil, nil
+	}
+	defer rows.Close()
+
+	var out []ScoredHotMessage
+	for rows.Next() {
+		var bm25score float64
+		var m model.HotMessage
+		var tsStr, createdStr string
+		var platform, platSess, linker sql.NullString
+		var hasEmb int64
+		if err := rows.Scan(&m.ID, &m.Speaker, &m.Content, &tsStr,
+			&platform, &platSess, &linker, &hasEmb, &createdStr, &bm25score); err != nil {
+			return nil, err
+		}
+		ts, err := time.Parse(time.RFC3339, tsStr)
+		if err != nil {
+			continue
+		}
+		ca, err := time.Parse(time.RFC3339, createdStr)
+		if err != nil {
+			continue
+		}
+		m.Timestamp = ts
+		m.CreatedAt = ca
+		m.Platform = platform.String
+		m.PlatformSessionID = platSess.String
+		m.LinkerRef = linker.String
+		m.HasEmbedding = hasEmb != 0
+		out = append(out, ScoredHotMessage{Message: m, Score: -bm25score})
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) SearchCooldownByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredHotMessage, error) {
+	if len(embedding) == 0 || limit <= 0 || s.vecIndex == nil {
+		return nil, nil
+	}
+	const pref = "cool:"
+	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
+	if err != nil {
+		return nil, fmt.Errorf("cooldown vector search: %w", err)
+	}
+	var out []ScoredHotMessage
+	for _, h := range hits {
+		id := strings.TrimPrefix(h.ID, pref)
+		if id == h.ID {
+			continue
+		}
+		row := s.db.QueryRowContext(ctx, `
+			SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+			FROM cooldown_messages WHERE id = ?`, id)
+		m, err := scanHotMessage(row)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		out = append(out, ScoredHotMessage{Message: *m, Score: 1 - h.Distance})
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) MoveHotToCooldown(ctx context.Context, olderThan time.Time, batchSize int) (int64, error) {
+	if batchSize <= 0 {
+		return 0, nil
+	}
+	cutoff := olderThan.UTC().Format(time.RFC3339)
+	movedAt := time.Now().UTC().Format(time.RFC3339)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	resIns, err := tx.ExecContext(ctx, `
+		INSERT INTO cooldown_messages (id, speaker, content, timestamp, platform,
+			platform_session_id, linker_ref, has_embedding, embedding, cluster_id,
+			transcript_file, transcript_line, processed_at, moved_from_hot, created_at)
+		SELECT id, speaker, content, timestamp, platform,
+			platform_session_id, linker_ref, has_embedding, embedding, NULL, NULL,
+			NULL, NULL, ?, created_at
+		FROM hot_messages
+		WHERE timestamp < ?
+		ORDER BY timestamp ASC
+		LIMIT ?`, movedAt, cutoff, batchSize)
+	if err != nil {
+		return 0, err
+	}
+	nMoved, err := resIns.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if nMoved == 0 {
+		return 0, tx.Commit()
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO cooldown_messages_fts (content, message_id)
+		SELECT hf.content, hf.message_id
+		FROM hot_messages_fts hf
+		JOIN hot_messages hm ON hf.message_id = hm.id
+		WHERE hm.timestamp < ?
+		ORDER BY hm.timestamp ASC
+		LIMIT ?`, cutoff, batchSize); err != nil {
+		return 0, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM hot_messages_fts WHERE message_id IN (
+			SELECT id FROM hot_messages WHERE timestamp < ? ORDER BY timestamp ASC LIMIT ?
+		)`, cutoff, batchSize); err != nil {
+		return 0, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM hot_messages WHERE id IN (
+			SELECT id FROM hot_messages WHERE timestamp < ? ORDER BY timestamp ASC LIMIT ?
+		)`, cutoff, batchSize); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	if s.vecIndex != nil {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT id, embedding FROM cooldown_messages
+			WHERE moved_from_hot = ? AND has_embedding = 1`, movedAt)
+		if err != nil {
+			return nMoved, fmt.Errorf("load moved embeddings: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var blob []byte
+			if err := rows.Scan(&id, &blob); err != nil {
+				return nMoved, err
+			}
+			vec := blobToFloat32(blob)
+			if len(vec) == 0 {
+				continue
+			}
+			_ = s.vecIndex.Remove("hot:" + id) //nolint:errcheck // best-effort cleanup
+			if err := s.vecIndex.Add("cool:"+id, vec); err != nil {
+				return nMoved, fmt.Errorf("vector index re-prefix %s: %w", id, err)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nMoved, err
+		}
+	}
+
+	return nMoved, nil
+}
+
+func (s *SQLiteStore) DeleteExpiredHot(ctx context.Context, olderThan time.Time) (int64, error) {
+	cutoff := olderThan.UTC().Format(time.RFC3339)
+
+	var hotVecIDs []string
+	if s.vecIndex != nil {
+		rows, err := s.db.QueryContext(ctx, `
+			SELECT id FROM hot_messages WHERE timestamp < ?
+			AND embedding IS NOT NULL AND length(embedding) > 0`, cutoff)
+		if err != nil {
+			return 0, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return 0, err
+			}
+			hotVecIDs = append(hotVecIDs, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		rows.Close()
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM hot_messages_fts WHERE message_id IN (
+			SELECT id FROM hot_messages WHERE timestamp < ?
+		)`, cutoff); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM hot_messages WHERE timestamp < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	if s.vecIndex != nil {
+		for _, id := range hotVecIDs {
+			_ = s.vecIndex.Remove("hot:" + id) //nolint:errcheck
+		}
+	}
+	return n, nil
+}
+
+func (s *SQLiteStore) CountHotMessages(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM hot_messages`).Scan(&n)
+	return n, err
 }

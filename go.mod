@@ -9,6 +9,7 @@ require (
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/oklog/ulid/v2 v2.1.1
+	github.com/unum-cloud/usearch/golang v0.0.0-20260216134828-40d127f472e9
 	gopkg.in/yaml.v3 v3.0.1
 )
 

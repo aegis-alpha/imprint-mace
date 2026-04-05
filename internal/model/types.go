@@ -26,11 +26,11 @@ const (
 	FactContact    FactType = "contact"
 	FactBio        FactType = "bio"
 	FactContext    FactType = "context"
-	FactLesson    FactType = "lesson"
-	FactWorkflow  FactType = "workflow"
-	FactGoal      FactType = "goal"
-	FactEvent     FactType = "event"
-	FactSkill     FactType = "skill"
+	FactLesson     FactType = "lesson"
+	FactWorkflow   FactType = "workflow"
+	FactGoal       FactType = "goal"
+	FactEvent      FactType = "event"
+	FactSkill      FactType = "skill"
 )
 
 type Source struct {
@@ -40,18 +40,18 @@ type Source struct {
 }
 
 type Fact struct {
-	ID           string    `json:"id"`
-	Source       Source    `json:"source"`
-	FactType     FactType  `json:"fact_type"`
-	Subject      string    `json:"subject,omitempty"`
-	Content      string    `json:"content"`
-	Confidence   float64   `json:"confidence"`
-	Validity     TimeRange `json:"validity"`
+	ID              string    `json:"id"`
+	Source          Source    `json:"source"`
+	FactType        FactType  `json:"fact_type"`
+	Subject         string    `json:"subject,omitempty"`
+	Content         string    `json:"content"`
+	Confidence      float64   `json:"confidence"`
+	Validity        TimeRange `json:"validity"`
 	SupersededBy    string    `json:"superseded_by,omitempty"`
 	SupersedeReason string    `json:"supersede_reason,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
-	Embedding      []float32 `json:"embedding,omitempty"`
-	EmbeddingModel string    `json:"embedding_model,omitempty"`
+	Embedding       []float32 `json:"embedding,omitempty"`
+	EmbeddingModel  string    `json:"embedding_model,omitempty"`
 }
 
 // --- Entities ---
@@ -150,6 +150,8 @@ type ExtractionResult struct {
 type Citation struct {
 	FactID          string `json:"fact_id,omitempty"`
 	ConsolidationID string `json:"consolidation_id,omitempty"`
+	// HotMessageID cites a raw message: "hot:<ULID>" or "cool:<ULID>" matching synthesis prompt tags.
+	HotMessageID string `json:"hot_message_id,omitempty"`
 }
 
 type QueryResult struct {
@@ -199,4 +201,19 @@ type TranscriptChunk struct {
 	LineEnd        int    `json:"line_end"`
 	ContentHash    string `json:"content_hash"`
 	EmbeddingModel string `json:"embedding_model,omitempty"`
+}
+
+// --- Hot phase (raw messages, HOT-PHASE-SPEC) ---
+
+// HotMessage is a realtime message in the hot store. Speaker is "user" or "assistant".
+type HotMessage struct {
+	ID                string    `json:"id"`
+	Speaker           string    `json:"speaker"`
+	Content           string    `json:"content"`
+	Timestamp         time.Time `json:"timestamp"`
+	Platform          string    `json:"platform,omitempty"`
+	PlatformSessionID string    `json:"platform_session_id,omitempty"`
+	LinkerRef         string    `json:"linker_ref,omitempty"`
+	HasEmbedding      bool      `json:"has_embedding"`
+	CreatedAt         time.Time `json:"created_at"`
 }

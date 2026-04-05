@@ -46,8 +46,8 @@ func testServer(t *testing.T, sender *mockSender) *Server {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 8); err != nil {
-		t.Fatalf("vec table: %v", err)
+	if err := store.AttachVectorIndex(8); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -71,8 +71,8 @@ func testStore(t *testing.T) (*Server, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 8); err != nil {
-		t.Fatalf("vec table: %v", err)
+	if err := store.AttachVectorIndex(8); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -177,6 +177,99 @@ func TestIngestTool_ProviderFails(t *testing.T) {
 	}
 	if !result.IsError {
 		t.Error("expected error result when provider fails")
+	}
+}
+
+type mcpHotSpy struct {
+	db.Store
+	last *model.HotMessage
+}
+
+func (s *mcpHotSpy) InsertHotMessage(ctx context.Context, msg *model.HotMessage, emb []float32) error {
+	cp := *msg
+	s.last = &cp
+	return s.Store.InsertHotMessage(ctx, msg, emb)
+}
+
+func newHotMCPServer(t *testing.T, dim int) (*Server, *mcpHotSpy) {
+	t.Helper()
+	base, err := db.Open(t.TempDir() + "/mcp-hot.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := base.AttachVectorIndex(dim); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { base.Close() })
+	spy := &mcpHotSpy{Store: base}
+	srv := New(nil, spy, nil, "test", slog.Default())
+	srv.SetHotEnabled(true)
+	return srv, spy
+}
+
+func TestMCPIngestHot_Basic(t *testing.T) {
+	srv, spy := newHotMCPServer(t, 8)
+	req := callTool(t, "imprint_ingest", map[string]any{
+		"text":   strings.Repeat("z", 50),
+		"source": "realtime:mcp-session",
+	})
+	result, err := srv.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error: %v", result)
+	}
+	text := resultText(t, result)
+	var r hotIngestMCPResponse
+	if err := json.Unmarshal([]byte(text), &r); err != nil {
+		t.Fatal(err)
+	}
+	if !r.Hot || r.ID == "" {
+		t.Fatalf("response: %+v", r)
+	}
+	if spy.last == nil || spy.last.PlatformSessionID != "mcp-session" {
+		t.Fatalf("spy last message: %#v", spy.last)
+	}
+}
+
+func TestMCPIngestHot_MissingText(t *testing.T) {
+	srv, _ := newHotMCPServer(t, 8)
+	req := callTool(t, "imprint_ingest", map[string]any{})
+	result, err := srv.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Error("expected error result for missing text")
+	}
+}
+
+func TestMCPIngestHot_Disabled(t *testing.T) {
+	sender := &mockSender{response: &provider.Response{
+		Content: mockJSON, ProviderName: "mock", Model: "test", TokensUsed: 100,
+	}}
+	srv := testServer(t, sender)
+	srv.SetHotEnabled(false)
+
+	req := callTool(t, "imprint_ingest", map[string]any{
+		"text":   "Acme uses Go for everything.",
+		"source": "test-session",
+	})
+	result, err := srv.handleIngest(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := resultText(t, result)
+	if strings.Contains(text, `"hot":true`) {
+		t.Fatalf("cold path should not return hot marker: %s", text)
+	}
+	var ir imprint.IngestResult
+	if err := json.Unmarshal([]byte(text), &ir); err != nil {
+		t.Fatalf("parse ingest result: %v", err)
+	}
+	if ir.FactsCount != 1 {
+		t.Errorf("expected 1 fact from mock extraction, got %d", ir.FactsCount)
 	}
 }
 
@@ -443,11 +536,8 @@ func TestQueryTool_ReturnsAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("vec table: %v", err)
-	}
-	if err := store.EnsureChunkVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("chunk vec table: %v", err)
+	if err := store.AttachVectorIndex(4); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -459,7 +549,7 @@ func TestQueryTool_ReturnsAnswer(t *testing.T) {
 	})
 
 	querySender := &mockQuerySender{response: &provider.Response{
-		Content: `{"answer": "Acme uses Go.", "citations": [{"fact_id": "qf-001"}], "confidence": 0.9, "notes": ""}`,
+		Content:      `{"answer": "Acme uses Go.", "citations": [{"fact_id": "qf-001"}], "confidence": 0.9, "notes": ""}`,
 		ProviderName: "mock", Model: "test", TokensUsed: 30,
 	}}
 
@@ -595,8 +685,8 @@ func testStoreWithBuilder(t *testing.T) (*Server, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 8); err != nil {
-		t.Fatalf("vec table: %v", err)
+	if err := store.AttachVectorIndex(8); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 

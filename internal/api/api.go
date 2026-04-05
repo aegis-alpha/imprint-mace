@@ -27,19 +27,25 @@ import (
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
+	"github.com/aegis-alpha/imprint-mace/internal/ingest"
+	"github.com/aegis-alpha/imprint-mace/internal/model"
+	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/quality"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
 )
 
 type Handler struct {
-	engine    *imprint.Engine
-	store     db.Store
-	querier   *query.Querier
-	builder   *impctx.Builder
-	collector *quality.Collector
-	logger    *slog.Logger
-	version   string
-	mux       *http.ServeMux
+	engine           *imprint.Engine
+	store            db.Store
+	querier          *query.Querier
+	builder          *impctx.Builder
+	collector        *quality.Collector
+	logger           *slog.Logger
+	version          string
+	mux              *http.ServeMux
+	embedder         provider.Embedder
+	hotEnabled       bool
+	hotEmbedMinChars int
 }
 
 func NewHandler(engine *imprint.Engine, store db.Store, querier *query.Querier, version string, logger *slog.Logger) *Handler {
@@ -48,13 +54,14 @@ func NewHandler(engine *imprint.Engine, store db.Store, querier *query.Querier, 
 
 func NewHandlerWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Querier, builder *impctx.Builder, version string, logger *slog.Logger) *Handler {
 	h := &Handler{
-		engine:  engine,
-		store:   store,
-		querier: querier,
-		builder: builder,
-		logger:  logger,
-		version: version,
-		mux:     http.NewServeMux(),
+		engine:           engine,
+		store:            store,
+		querier:          querier,
+		builder:          builder,
+		logger:           logger,
+		version:          version,
+		mux:              http.NewServeMux(),
+		hotEmbedMinChars: 50,
 	}
 	h.mux.HandleFunc("/status", h.methodGET(h.handleStatus))
 	h.mux.HandleFunc("/entities", h.methodGET(h.handleEntities))
@@ -75,6 +82,24 @@ func NewHandlerWithBuilder(engine *imprint.Engine, store db.Store, querier *quer
 
 func (h *Handler) SetCollector(c *quality.Collector) {
 	h.collector = c
+}
+
+// SetEmbedder sets the embedding provider for hot-path ingest (nil disables hot embeddings).
+func (h *Handler) SetEmbedder(e provider.Embedder) {
+	h.embedder = e
+}
+
+// SetHotEnabled switches POST /ingest to raw hot storage when true.
+func (h *Handler) SetHotEnabled(enabled bool) {
+	h.hotEnabled = enabled
+}
+
+// SetHotEmbedMinChars sets the minimum text length for synchronous embedding on hot ingest (default 50).
+func (h *Handler) SetHotEmbedMinChars(n int) {
+	if n <= 0 {
+		n = 50
+	}
+	h.hotEmbedMinChars = n
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -112,13 +137,13 @@ func (h *Handler) methodDELETE(handler http.HandlerFunc) http.HandlerFunc {
 }
 
 type statusResponse struct {
-	Version         string                    `json:"version"`
-	Stats           *db.DBStats               `json:"stats"`
-	QualitySignals  []qualitySignalResponse   `json:"quality_signals,omitempty"`
-	QueryStats      *db.QueryLogStatsResult   `json:"query_stats,omitempty"`
-	EvalScores      *evalScoresResponse       `json:"eval_scores,omitempty"`
-	Providers       []providerHealthResponse  `json:"providers,omitempty"`
-	RetryQueueDepth int                       `json:"retry_queue_depth,omitempty"`
+	Version         string                   `json:"version"`
+	Stats           *db.DBStats              `json:"stats"`
+	QualitySignals  []qualitySignalResponse  `json:"quality_signals,omitempty"`
+	QueryStats      *db.QueryLogStatsResult  `json:"query_stats,omitempty"`
+	EvalScores      *evalScoresResponse      `json:"eval_scores,omitempty"`
+	Providers       []providerHealthResponse `json:"providers,omitempty"`
+	RetryQueueDepth int                      `json:"retry_queue_depth,omitempty"`
 }
 
 type providerHealthResponse struct {
@@ -381,6 +406,13 @@ type contextResponse struct {
 type ingestRequest struct {
 	Text   string `json:"text"`
 	Source string `json:"source"`
+	Mode   string `json:"mode"`
+}
+
+type hotIngestResponse struct {
+	ID           string `json:"id"`
+	HasEmbedding bool   `json:"has_embedding"`
+	Hot          bool   `json:"hot"`
 }
 
 func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -395,6 +427,11 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Source == "" {
 		req.Source = "api"
+	}
+
+	if h.hotEnabled && !strings.EqualFold(strings.TrimSpace(req.Mode), "extract") {
+		h.handleHotIngest(w, r, &req)
+		return
 	}
 
 	// Detach from HTTP request context so client disconnect (e.g. hook
@@ -420,6 +457,55 @@ func (h *Handler) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) handleHotIngest(w http.ResponseWriter, r *http.Request, req *ingestRequest) {
+	ctx := r.Context()
+	now := time.Now().UTC()
+	platform, psid := ingest.ParseHotIngestSource(req.Source)
+
+	minChars := h.hotEmbedMinChars
+	if minChars <= 0 {
+		minChars = 50
+	}
+
+	msg := &model.HotMessage{
+		ID:                db.NewID(),
+		Speaker:           "user",
+		Content:           req.Text,
+		Timestamp:         now,
+		Platform:          platform,
+		PlatformSessionID: psid,
+		HasEmbedding:      false,
+		CreatedAt:         now,
+	}
+
+	var embedding []float32
+	if len(req.Text) >= minChars && h.embedder != nil {
+		vec, err := h.embedder.Embed(ctx, req.Text)
+		if err != nil {
+			h.logger.Warn("hot ingest embedding failed", "error", err)
+		} else {
+			embedding = vec
+			msg.HasEmbedding = true
+		}
+	}
+
+	if err := ingest.ApplyHotLinkerRef(ctx, h.store, msg); err != nil {
+		h.logger.Warn("hot linker ref failed", "error", err)
+	}
+
+	if err := h.store.InsertHotMessage(ctx, msg, embedding); err != nil {
+		h.logger.Error("hot ingest insert failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "ingest failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, hotIngestResponse{
+		ID:           msg.ID,
+		HasEmbedding: msg.HasEmbedding,
+		Hot:          true,
+	})
 }
 
 type errorResponse struct {
@@ -452,13 +538,10 @@ func (h *Handler) handleAdminReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sqlStore, ok := h.store.(interface {
-		EnsureVecTable(ctx context.Context, dims int) error
-		EnsureChunkVecTable(ctx context.Context, dims int) error
-	}); ok {
-		ctx := r.Context()
-		_ = sqlStore.EnsureVecTable(ctx, 0)      //nolint:errcheck // best-effort after reset; dims unknown
-		_ = sqlStore.EnsureChunkVecTable(ctx, 0) //nolint:errcheck // best-effort after reset; dims unknown
+	if sqlStore, ok := h.store.(*db.SQLiteStore); ok {
+		if err := sqlStore.ReloadVectorIndex(r.Context()); err != nil {
+			h.logger.Warn("vector index reload after reset failed", "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reset complete"})

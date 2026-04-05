@@ -30,8 +30,8 @@ func openTestStore(t *testing.T) *db.SQLiteStore {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("vec table: %v", err)
+	if err := store.AttachVectorIndex(4); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	return store

@@ -50,11 +50,8 @@ func testQuerier(t *testing.T, sender *mockSender, embedder provider.Embedder) (
 		me := embedder.(*mockEmbedder)
 		dims := len(me.vec)
 		if dims > 0 {
-			if err := store.EnsureVecTable(context.Background(), dims); err != nil {
-				t.Fatalf("ensure vec table: %v", err)
-			}
-			if err := store.EnsureChunkVecTable(context.Background(), dims); err != nil {
-				t.Fatalf("ensure chunk vec table: %v", err)
+			if err := store.AttachVectorIndex(dims); err != nil {
+				t.Fatalf("AttachVectorIndex: %v", err)
 			}
 		}
 	}
@@ -67,13 +64,13 @@ func seedFact(t *testing.T, store db.Store, id, subject, content string, embedde
 	t.Helper()
 	now := time.Now()
 	f := &model.Fact{
-		ID:       id,
-		Source:   model.Source{TranscriptFile: "test.md"},
-		FactType: model.FactDecision,
-		Subject:  subject,
-		Content:  content,
+		ID:         id,
+		Source:     model.Source{TranscriptFile: "test.md"},
+		FactType:   model.FactDecision,
+		Subject:    subject,
+		Content:    content,
 		Confidence: 0.9,
-		CreatedAt: now,
+		CreatedAt:  now,
 	}
 	if err := store.CreateFact(context.Background(), f); err != nil {
 		t.Fatalf("seed fact %s: %v", id, err)
@@ -216,34 +213,30 @@ func TestBuildPrompt_FormatsFactsCorrectly(t *testing.T) {
 	q := New(nil, nil, nil, "", slog.Default())
 
 	lr := [2]int{10, 15}
+	f1 := model.Fact{
+		ID:         "bp-001",
+		FactType:   model.FactDecision,
+		Subject:    "Acme",
+		Content:    "Acme uses Go.",
+		Confidence: 0.95,
+		CreatedAt:  time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC),
+		Source:     model.Source{TranscriptFile: "chat.md", LineRange: &lr},
+	}
+	f2 := model.Fact{
+		ID:         "bp-002",
+		FactType:   model.FactPreference,
+		Subject:    "Alice",
+		Content:    "Alice prefers dark mode.",
+		Confidence: 0.8,
+		CreatedAt:  time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC),
+	}
 	facts := []enrichedFact{
 		{
-			rankedFact: rankedFact{
-				fact: model.Fact{
-					ID:         "bp-001",
-					FactType:   model.FactDecision,
-					Subject:    "Acme",
-					Content:    "Acme uses Go.",
-					Confidence: 0.95,
-					CreatedAt:  time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC),
-					Source:     model.Source{TranscriptFile: "chat.md", LineRange: &lr},
-				},
-				score: 1.0,
-			},
-			context: "line 10\nline 11\nline 12\n",
+			rankedItem: rankedItem{fact: &f1, score: 1.0},
+			context:    "line 10\nline 11\nline 12\n",
 		},
 		{
-			rankedFact: rankedFact{
-				fact: model.Fact{
-					ID:         "bp-002",
-					FactType:   model.FactPreference,
-					Subject:    "Alice",
-					Content:    "Alice prefers dark mode.",
-					Confidence: 0.8,
-					CreatedAt:  time.Date(2026, 3, 14, 0, 0, 0, 0, time.UTC),
-				},
-				score: 0.5,
-			},
+			rankedItem: rankedItem{fact: &f2, score: 0.5},
 		},
 	}
 
@@ -278,21 +271,19 @@ func TestBuildPrompt_FormatsFactsCorrectly(t *testing.T) {
 func TestBuildPrompt_FactWithoutLineRange_NoPanic(t *testing.T) {
 	q := New(nil, nil, nil, "", slog.Default())
 
+	f := model.Fact{
+		ID:         "nlr-001",
+		FactType:   model.FactDecision,
+		Subject:    "Acme",
+		Content:    "Acme uses Go.",
+		Confidence: 0.9,
+		CreatedAt:  time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC),
+		Source:     model.Source{TranscriptFile: "chat.md"},
+	}
 	facts := []enrichedFact{
 		{
-			rankedFact: rankedFact{
-				fact: model.Fact{
-					ID:         "nlr-001",
-					FactType:   model.FactDecision,
-					Subject:    "Acme",
-					Content:    "Acme uses Go.",
-					Confidence: 0.9,
-					CreatedAt:  time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC),
-					Source:     model.Source{TranscriptFile: "chat.md"},
-				},
-				score: 1.0,
-			},
-			context: "some transcript context\n",
+			rankedItem: rankedItem{fact: &f, score: 1.0},
+			context:    "some transcript context\n",
 		},
 	}
 
@@ -371,11 +362,14 @@ func TestMergeResults_DeduplicatesByFactID(t *testing.T) {
 	ranked := q.mergeAndRank(r)
 
 	ids := map[string]bool{}
-	for _, rf := range ranked {
-		if ids[rf.fact.ID] {
-			t.Errorf("duplicate fact ID %q in ranked results", rf.fact.ID)
+	for _, ri := range ranked {
+		if ri.fact == nil {
+			t.Fatal("expected only facts in this test")
 		}
-		ids[rf.fact.ID] = true
+		if ids[ri.fact.ID] {
+			t.Errorf("duplicate fact ID %q in ranked results", ri.fact.ID)
+		}
+		ids[ri.fact.ID] = true
 	}
 	if len(ranked) != 3 {
 		t.Errorf("expected 3 unique facts, got %d", len(ranked))
@@ -400,8 +394,11 @@ func TestMergeResults_FiltersExpiredFacts(t *testing.T) {
 	if len(ranked) != 2 {
 		t.Fatalf("expected 2 facts (expired filtered out), got %d", len(ranked))
 	}
-	for _, rf := range ranked {
-		if rf.fact.ID == "exp-001" {
+	for _, ri := range ranked {
+		if ri.fact == nil {
+			continue
+		}
+		if ri.fact.ID == "exp-001" {
 			t.Error("expired fact should have been filtered out")
 		}
 	}
@@ -424,11 +421,131 @@ func TestMergeResults_RRFRanking(t *testing.T) {
 	if len(ranked) < 2 {
 		t.Fatalf("expected at least 2 ranked facts, got %d", len(ranked))
 	}
-	if ranked[0].fact.ID != "rrf-001" {
-		t.Errorf("expected rrf-001 to rank first (appears in both layers), got %q", ranked[0].fact.ID)
+	if ranked[0].fact == nil || ranked[0].fact.ID != "rrf-001" {
+		t.Errorf("expected rrf-001 to rank first (appears in both layers), got %v", ranked[0].fact)
 	}
 	if ranked[0].score <= ranked[1].score {
 		t.Error("expected first fact to have higher RRF score than second")
+	}
+}
+
+func TestMergeSetUnion_PreservesDenseOrder(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "su-1", Content: "first"}},
+			{Fact: model.Fact{ID: "su-2", Content: "second"}},
+			{Fact: model.Fact{ID: "su-3", Content: "third"}},
+		},
+		factsByText: []db.ScoredFact{
+			{Fact: model.Fact{ID: "su-3", Content: "third"}},
+			{Fact: model.Fact{ID: "su-1", Content: "first"}},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) < 3 {
+		t.Fatalf("expected 3 facts, got %d", len(ranked))
+	}
+	if ranked[0].fact == nil || ranked[1].fact == nil || ranked[2].fact == nil {
+		t.Fatal("expected fact items")
+	}
+	if ranked[0].fact.ID != "su-1" || ranked[1].fact.ID != "su-2" || ranked[2].fact.ID != "su-3" {
+		t.Errorf("expected dense order su-1, su-2, su-3, got %q, %q, %q",
+			ranked[0].fact.ID, ranked[1].fact.ID, ranked[2].fact.ID)
+	}
+}
+
+func TestMergeSetUnion_AppendsSparseOnly(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "v-only", Content: "vector"}},
+		},
+		factsByText: []db.ScoredFact{
+			{Fact: model.Fact{ID: "t-1", Content: "text1"}},
+			{Fact: model.Fact{ID: "t-2", Content: "text2"}},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) != 3 {
+		t.Fatalf("expected 3 facts, got %d", len(ranked))
+	}
+	if ranked[0].fact == nil {
+		t.Fatal("expected fact")
+	}
+	if ranked[0].fact.ID != "v-only" {
+		t.Errorf("expected vector fact first, got %q", ranked[0].fact.ID)
+	}
+	if ranked[1].fact == nil || ranked[2].fact == nil {
+		t.Fatal("expected facts")
+	}
+	if ranked[1].fact.ID != "t-1" || ranked[2].fact.ID != "t-2" {
+		t.Errorf("expected text facts in FTS order after vector, got %q then %q", ranked[1].fact.ID, ranked[2].fact.ID)
+	}
+}
+
+func TestMergeSetUnion_DeduplicatesByFactID(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "a", Content: "A"}},
+			{Fact: model.Fact{ID: "b", Content: "B"}},
+		},
+		factsByText: []db.ScoredFact{
+			{Fact: model.Fact{ID: "b", Content: "B"}},
+			{Fact: model.Fact{ID: "c", Content: "C"}},
+		},
+		graphFacts: []model.Fact{
+			{ID: "a", Content: "A"},
+			{ID: "d", Content: "D"},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) != 4 {
+		t.Fatalf("expected 4 unique facts a,b,c,d order, got %d", len(ranked))
+	}
+	want := []string{"a", "b", "c", "d"}
+	for i := range want {
+		if ranked[i].fact == nil {
+			t.Fatalf("position %d: want fact", i)
+		}
+		if ranked[i].fact.ID != want[i] {
+			t.Errorf("position %d: want %q, got %q", i, want[i], ranked[i].fact.ID)
+		}
+	}
+}
+
+func TestMergeSetUnion_FiltersExpiredFacts(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	past := time.Now().UTC().Add(-24 * time.Hour)
+	future := time.Now().UTC().Add(24 * time.Hour)
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "exp-001", Content: "expired", Validity: model.TimeRange{ValidUntil: &past}}, Score: 0.9},
+			{Fact: model.Fact{ID: "exp-002", Content: "active", Validity: model.TimeRange{ValidUntil: &future}}, Score: 0.8},
+			{Fact: model.Fact{ID: "exp-003", Content: "no expiry"}, Score: 0.7},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 facts (expired filtered out), got %d", len(ranked))
+	}
+	for _, ri := range ranked {
+		if ri.fact == nil {
+			continue
+		}
+		if ri.fact.ID == "exp-001" {
+			t.Error("expired fact should have been filtered out")
+		}
 	}
 }
 
@@ -544,14 +661,12 @@ func TestEnrichWithContext_LoadsLines(t *testing.T) {
 	q := New(nil, nil, nil, dir, slog.Default())
 
 	lr := [2]int{4, 6}
-	ranked := []rankedFact{{
-		fact: model.Fact{
-			ID:      "enr-001",
-			Source:  model.Source{TranscriptFile: "chat.md", LineRange: &lr},
-			Content: "some fact",
-		},
-		score: 1.0,
-	}}
+	f := model.Fact{
+		ID:      "enr-001",
+		Source:  model.Source{TranscriptFile: "chat.md", LineRange: &lr},
+		Content: "some fact",
+	}
+	ranked := []rankedItem{{fact: &f, score: 1.0}}
 
 	enriched := q.enrichWithContext(context.Background(), ranked, nil)
 	if len(enriched) != 1 {
@@ -568,14 +683,12 @@ func TestEnrichWithContext_LoadsLines(t *testing.T) {
 func TestEnrichWithContext_SkipsIfNoLineRange(t *testing.T) {
 	q := New(nil, nil, nil, t.TempDir(), slog.Default())
 
-	ranked := []rankedFact{{
-		fact: model.Fact{
-			ID:      "enr-002",
-			Source:  model.Source{TranscriptFile: "chat.md"},
-			Content: "some fact",
-		},
-		score: 1.0,
-	}}
+	f := model.Fact{
+		ID:      "enr-002",
+		Source:  model.Source{TranscriptFile: "chat.md"},
+		Content: "some fact",
+	}
+	ranked := []rankedItem{{fact: &f, score: 1.0}}
 
 	enriched := q.enrichWithContext(context.Background(), ranked, nil)
 	if enriched[0].context != "" {
@@ -620,10 +733,8 @@ func TestEnrichWithContext_IncludesChunkContext(t *testing.T) {
 
 	q := New(store, nil, nil, dir, slog.Default())
 
-	ranked := []rankedFact{{
-		fact:  model.Fact{ID: "f-001", Content: "some fact"},
-		score: 1.0,
-	}}
+	f := model.Fact{ID: "f-001", Content: "some fact"}
+	ranked := []rankedItem{{fact: &f, score: 1.0}}
 
 	r := &retrievalResult{
 		chunksByVector: []db.ScoredChunk{
@@ -924,22 +1035,25 @@ func TestBuildPrompt_IncludesDataQuality(t *testing.T) {
 	q := New(nil, nil, nil, "", slog.Default())
 	now := time.Now()
 
+	f1 := model.Fact{
+		ID: "dqp-001", FactType: model.FactDecision, Subject: "Acme",
+		Content: "Acme uses Go.", Confidence: 0.9,
+		CreatedAt: now, Source: model.Source{TranscriptFile: "a.md"},
+	}
+	f2 := model.Fact{
+		ID: "dqp-002", FactType: model.FactPreference, Subject: "Alice",
+		Content: "Alice prefers dark mode.", Confidence: 0.7,
+		CreatedAt: now, Source: model.Source{TranscriptFile: "b.md"},
+	}
+	f3 := model.Fact{
+		ID: "dqp-003", FactType: model.FactProject, Subject: "Acme",
+		Content: "Acme deploys to Linux.", Confidence: 0.85,
+		CreatedAt: now, Source: model.Source{TranscriptFile: "a.md"},
+	}
 	facts := []enrichedFact{
-		{rankedFact: rankedFact{fact: model.Fact{
-			ID: "dqp-001", FactType: model.FactDecision, Subject: "Acme",
-			Content: "Acme uses Go.", Confidence: 0.9,
-			CreatedAt: now, Source: model.Source{TranscriptFile: "a.md"},
-		}}},
-		{rankedFact: rankedFact{fact: model.Fact{
-			ID: "dqp-002", FactType: model.FactPreference, Subject: "Alice",
-			Content: "Alice prefers dark mode.", Confidence: 0.7,
-			CreatedAt: now, Source: model.Source{TranscriptFile: "b.md"},
-		}}},
-		{rankedFact: rankedFact{fact: model.Fact{
-			ID: "dqp-003", FactType: model.FactProject, Subject: "Acme",
-			Content: "Acme deploys to Linux.", Confidence: 0.85,
-			CreatedAt: now, Source: model.Source{TranscriptFile: "a.md"},
-		}}},
+		{rankedItem: rankedItem{fact: &f1}},
+		{rankedItem: rankedItem{fact: &f2}},
+		{rankedItem: rankedItem{fact: &f3}},
 	}
 
 	prompt := q.buildPrompt("What does Acme use?", facts)
@@ -962,5 +1076,203 @@ func TestBuildPrompt_OmitsDataQualityWhenEmpty(t *testing.T) {
 
 	if strings.Contains(prompt.user, "### Data Quality") {
 		t.Error("expected user prompt to NOT contain '### Data Quality' when no facts")
+	}
+}
+
+func TestMergeAndRank_MergesFactsAndHotMessages(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+	r := &retrievalResult{
+		factsByText: []db.ScoredFact{
+			{Fact: model.Fact{ID: "f1", Content: "alpha"}},
+		},
+		hotByText: []db.ScoredHotMessage{
+			{Message: model.HotMessage{ID: "hm1", Speaker: "user", Content: "beta unique", Timestamp: time.Now().UTC()}},
+		},
+	}
+	out := q.mergeAndRank(r)
+	if len(out) != 2 {
+		t.Fatalf("want 2 merged items, got %d", len(out))
+	}
+	seenFact, seenHot := false, false
+	for _, ri := range out {
+		if ri.fact != nil && ri.fact.ID == "f1" {
+			seenFact = true
+		}
+		if ri.hotMessage != nil && ri.hotMessage.ID == "hm1" {
+			seenHot = true
+		}
+	}
+	if !seenFact || !seenHot {
+		t.Errorf("want fact f1 and hot hm1 in merge, seenFact=%v seenHot=%v", seenFact, seenHot)
+	}
+}
+
+func TestMergeSetUnion_AppendsHotAfterFacts(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default(), WithMergeStrategy("set-union"))
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{{Fact: model.Fact{ID: "fv", Content: "x"}}},
+		hotByText: []db.ScoredHotMessage{
+			{Message: model.HotMessage{ID: "h1", Speaker: "assistant", Content: "y", Timestamp: time.Now().UTC()}},
+		},
+	}
+	out := q.mergeRanked(r)
+	if len(out) < 2 {
+		t.Fatalf("want at least 2, got %d", len(out))
+	}
+	if out[0].fact == nil || out[0].fact.ID != "fv" {
+		t.Errorf("want fact first, got %#v", out[0])
+	}
+	if out[1].hotMessage == nil || out[1].hotMessage.ID != "h1" {
+		t.Errorf("want hot second, got %#v", out[1])
+	}
+}
+
+func TestBuildPrompt_IncludesFreshMessagesNewestFirst(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+	t1 := time.Date(2026, 4, 4, 14, 30, 0, 0, time.UTC)
+	t2 := time.Date(2026, 4, 4, 15, 0, 0, 0, time.UTC)
+	m1 := model.HotMessage{ID: "idolder", Speaker: "user", Content: "first", Timestamp: t1, CreatedAt: t1}
+	m2 := model.HotMessage{ID: "idnewer", Speaker: "assistant", Content: "second", Timestamp: t2, CreatedAt: t2, LinkerRef: "idolder"}
+	hm1, hm2 := m1, m2
+	f := model.Fact{ID: "f1", FactType: model.FactDecision, Subject: "S", Content: "c", Confidence: 0.9, CreatedAt: t1}
+	items := []enrichedFact{
+		{rankedItem: rankedItem{hotMessage: &hm1, score: 0.5, isRawMessage: true, messageCitationPrefix: "hot:"}},
+		{rankedItem: rankedItem{fact: &f, score: 0.9}},
+		{rankedItem: rankedItem{hotMessage: &hm2, score: 0.4, isRawMessage: true, messageCitationPrefix: "hot:"}},
+	}
+	p := q.buildPrompt("q?", items)
+	if !strings.Contains(p.user, "### Fresh Messages (recent, unverified)") {
+		t.Fatal("missing fresh section")
+	}
+	iNew := strings.Index(p.user, "[hot:idnewer]")
+	iOld := strings.Index(p.user, "[hot:idolder]")
+	if iNew <= 0 || iOld <= 0 || iNew >= iOld {
+		t.Errorf("want newer line before older in prompt: new=%d old=%d", iNew, iOld)
+	}
+	if !strings.Contains(p.user, "(->idolder)") {
+		t.Error("expected linker_ref suffix in fresh line")
+	}
+	if !strings.Contains(p.user, "### Facts") {
+		t.Error("expected facts section after fresh messages")
+	}
+}
+
+func TestParseResponse_HotMessageCitation(t *testing.T) {
+	input := `{"answer": "ok", "citations": [{"hot_message_id": "hot:01ABC"}], "confidence": 0.5, "notes": ""}`
+	res, err := parseResponse(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Citations) != 1 || res.Citations[0].HotMessageID != "hot:01ABC" {
+		t.Errorf("citation: %+v", res.Citations)
+	}
+}
+
+func TestParseResponse_CoolMessageCitation(t *testing.T) {
+	input := `{"answer": "ok", "citations": [{"hot_message_id": "cool:01XYZ"}], "confidence": 0.5, "notes": ""}`
+	res, err := parseResponse(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Citations) != 1 || res.Citations[0].HotMessageID != "cool:01XYZ" {
+		t.Errorf("citation: %+v", res.Citations)
+	}
+}
+
+func TestBuildPrompt_FreshMessagesCooldownTag(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+	tm := time.Date(2026, 4, 4, 12, 0, 0, 0, time.UTC)
+	m := model.HotMessage{ID: "cd1", Speaker: "user", Content: "cooldown line", Timestamp: tm, CreatedAt: tm}
+	hm := m
+	items := []enrichedFact{
+		{rankedItem: rankedItem{hotMessage: &hm, score: 1, isRawMessage: true, messageCitationPrefix: "cool:"}},
+	}
+	p := q.buildPrompt("q?", items)
+	if !strings.Contains(p.user, "[cool:cd1]") {
+		t.Fatalf("expected [cool:cd1] in user prompt, got:\n%s", p.user)
+	}
+}
+
+func TestMergeAndRank_CooldownCitationPrefix(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+	r := &retrievalResult{
+		cooldownByText: []db.ScoredHotMessage{
+			{Message: model.HotMessage{ID: "c1", Speaker: "user", Content: "x", Timestamp: time.Now().UTC()}},
+		},
+	}
+	out := q.mergeAndRank(r)
+	if len(out) != 1 {
+		t.Fatalf("want 1 item, got %d", len(out))
+	}
+	if out[0].messageCitationPrefix != "cool:" {
+		t.Errorf("messageCitationPrefix=%q", out[0].messageCitationPrefix)
+	}
+}
+
+func TestRetrieve_OmitsHotMessages(t *testing.T) {
+	vec := []float32{0.1, 0.2, 0.3, 0.4}
+	embedder := &mockEmbedder{vec: vec}
+	q, store := testQuerier(t, &mockSender{}, embedder)
+	ctx := context.Background()
+	seedFact(t, store, "cold-only-1", "Subj", "cold content retrieve omit uniquexyz", embedder)
+	old := time.Now().UTC().Add(-2 * time.Hour)
+	hm := &model.HotMessage{
+		ID:        db.NewID(),
+		Speaker:   "user",
+		Content:   strings.Repeat("x", 50) + " hotretrieveomit keyword",
+		Timestamp: old,
+		CreatedAt: old,
+	}
+	if err := store.InsertHotMessage(ctx, hm, vec); err != nil {
+		t.Fatal(err)
+	}
+	res, err := q.Retrieve(ctx, "hotretrieveomit uniquexyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rf := range res.Ranked {
+		if rf.Fact.ID == hm.ID {
+			t.Error("hot message id must not appear in Retrieve output")
+		}
+	}
+	foundCold := false
+	for _, rf := range res.Ranked {
+		if rf.Fact.ID == "cold-only-1" {
+			foundCold = true
+		}
+	}
+	if !foundCold {
+		t.Error("expected cold fact in Retrieve")
+	}
+}
+
+func TestRetrieve_HotSearchLayersPopulated(t *testing.T) {
+	vec := []float32{0.1, 0.2, 0.3, 0.4}
+	embedder := &mockEmbedder{vec: vec}
+	q, store := testQuerier(t, &mockSender{}, embedder)
+	ctx := context.Background()
+	seedFact(t, store, "lay-f1", "Topic", "golang layer test content", embedder)
+	hm := &model.HotMessage{
+		ID:        db.NewID(),
+		Speaker:   "user",
+		Content:   strings.Repeat("z", 50) + " layerhotunique fts",
+		Timestamp: time.Now().UTC(),
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.InsertHotMessage(ctx, hm, vec); err != nil {
+		t.Fatal(err)
+	}
+	r := q.retrieve(ctx, "layerhotunique golang", vec)
+	if len(r.factsByVector) == 0 {
+		t.Error("expected facts by vector")
+	}
+	if len(r.factsByText) == 0 {
+		t.Error("expected facts by text")
+	}
+	if len(r.hotByVector) == 0 {
+		t.Error("expected hot by vector")
+	}
+	if len(r.hotByText) == 0 {
+		t.Error("expected hot by text")
 	}
 }

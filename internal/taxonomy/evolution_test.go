@@ -352,8 +352,8 @@ func openTestDBWithVec(t *testing.T, dims int) (db.Store, *sql.DB) {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), dims); err != nil {
-		t.Fatalf("ensure vec table: %v", err)
+	if err := store.AttachVectorIndex(dims); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 	return store, store.RawDB()

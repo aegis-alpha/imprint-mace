@@ -55,6 +55,15 @@ priority = 4
 host = "127.0.0.1"
 port = 8080
 
+# Hot phase (opt-in): raw message ingest + TTL move to cooldown + hot/cooldown in query merge.
+# When enabled, POST /ingest and imprint_ingest store messages without LLM extraction unless mode = "extract".
+# [hot]
+# enabled = false
+# ttl_minutes = 60
+# tick_seconds = 60
+# batch_size = 100
+# embed_min_chars = 50
+
 [watcher]
 path = "/data/transcripts"
 poll_interval_seconds = 30
@@ -158,6 +167,28 @@ model = "qwen/qwen3-next-80b:free"
 api_key_env = "OPENROUTER_API_KEY"
 timeout_seconds = 30
 priority = 2
+
+# Hot phase (streaming message storage, Phase 1 of Hot-Cool-Cold Pipeline, v0.5.0)
+# When enabled, POST /ingest and imprint_ingest store raw messages for instant search (zero LLM cost).
+# Messages queryable immediately via FTS5 + USearch HNSW. TTL moves messages to cooldown. Both searchable.
+# [hot]
+# enabled = true
+# ttl_minutes = 60          # How long messages stay in hot before moving to cooldown
+# tick_seconds = 60         # TTL check interval
+# batch_size = 100          # Max messages moved per TTL tick
+# embed_min_chars = 50      # Min content length for embedding (E021: 50 chars, zero recall loss)
+
+# Optional post-merge rerank (Cohere /v2/rerank). Only the first [[providers.reranker]] entry is used; extras are ignored (see server log warning).
+# top_n = 0 reranks the full merged fact prefix (still skips rerank if hot/cooldown rows lead the list).
+# [rerank]
+# top_n = 15
+#
+# [[providers.reranker]]
+# name = "cohere"
+# base_url = "https://api.cohere.com"
+# model = "rerank-english-v3.0"
+# api_key_env = "COHERE_API_KEY"
+# timeout_seconds = 45
 
 # Type taxonomy: the runtime source of truth for extraction prompts (D18).
 # These are rendered into the extraction prompt template at startup.

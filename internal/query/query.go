@@ -1,8 +1,8 @@
 // Package query implements the hybrid retrieval pipeline for answering
 // natural language questions from the knowledge base.
 //
-// Pipeline: embed question -> parallel retrieval (4 layers) -> merge/rank
-// -> ReadContext enrichment -> LLM synthesis -> parse response.
+// Pipeline: embed question -> parallel retrieval (cold + hot/cooldown layers) -> merge/rank
+// -> optional rerank -> ReadContext enrichment -> LLM synthesis -> parse response.
 package query
 
 import (
@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -34,29 +35,66 @@ type Querier struct {
 	sender        Sender
 	transcriptDir string
 	logger        *slog.Logger
+	// mergeStrategy: "" or "rrf" = Reciprocal Rank Fusion; "set-union" = dense order, then unseen sparse, then unseen graph.
+	mergeStrategy string
+	reranker      Reranker
+	// rerankTopN: if > 0, only this many leading facts are reranked; rest keep merge order.
+	rerankTopN int
+}
+
+// QuerierOption configures a Querier created with New.
+type QuerierOption func(*Querier)
+
+// WithMergeStrategy selects how fact lists are merged after retrieval.
+// Use "rrf" (default) for reciprocal rank fusion, or "set-union" for dense-first
+// positional ordering (see mergeSetUnion).
+func WithMergeStrategy(s string) QuerierOption {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return func(q *Querier) {
+		q.mergeStrategy = s
+	}
 }
 
 // New creates a Querier. Pass nil for embedder to disable vector search
 // (falls back to FTS5 only).
-func New(store db.Store, embedder provider.Embedder, sender Sender, transcriptDir string, logger *slog.Logger) *Querier {
-	return &Querier{
+func New(store db.Store, embedder provider.Embedder, sender Sender, transcriptDir string, logger *slog.Logger, opts ...QuerierOption) *Querier {
+	q := &Querier{
 		store:         store,
 		embedder:      embedder,
 		sender:        sender,
 		transcriptDir: transcriptDir,
 		logger:        logger,
 	}
+	for _, o := range opts {
+		o(q)
+	}
+	return q
+}
+
+func (q *Querier) mergeRanked(r *retrievalResult) []rankedItem {
+	switch q.mergeStrategy {
+	case "set-union", "set_union":
+		return q.mergeSetUnion(r)
+	default:
+		return q.mergeAndRank(r)
+	}
 }
 
 // retrievalResult holds the raw output from all retrieval layers
 // before merging and ranking.
 type retrievalResult struct {
-	factsByVector  []db.ScoredFact
-	factsByText    []db.ScoredFact
-	chunksByVector []db.ScoredChunk
-	chunksByText   []db.ScoredChunk
-	graphFacts     []model.Fact
+	factsByVector    []db.ScoredFact
+	factsByText      []db.ScoredFact
+	chunksByVector   []db.ScoredChunk
+	chunksByText     []db.ScoredChunk
+	graphFacts       []model.Fact
+	hotByVector      []db.ScoredHotMessage
+	hotByText        []db.ScoredHotMessage
+	cooldownByVector []db.ScoredHotMessage
+	cooldownByText   []db.ScoredHotMessage
 }
+
+const hotRetrievalLimit = 10
 
 // RetrievalResult holds ranked facts with per-layer attribution,
 // suitable for eval without LLM synthesis.
@@ -78,8 +116,10 @@ type RankedFact struct {
 	FromGraph  bool
 }
 
-// Retrieve runs the retrieval pipeline (embed, parallel search, RRF merge)
-// without LLM synthesis. Returns ranked facts with per-layer attribution.
+// Retrieve runs the retrieval pipeline (embed, parallel search, merge) without LLM synthesis.
+// It returns ranked cold facts only (structured knowledge). Hot and cooldown raw messages are
+// omitted so retrieval eval measures cold-path quality. A future RetrieveWithHot API may expose
+// merged hot + cold rankings for callers that need them.
 func (q *Querier) Retrieve(ctx context.Context, question string) (*RetrievalResult, error) {
 	var embedding []float32
 	if q.embedder != nil {
@@ -91,7 +131,8 @@ func (q *Querier) Retrieve(ctx context.Context, question string) (*RetrievalResu
 	}
 
 	r := q.retrieve(ctx, question, embedding)
-	ranked := q.mergeAndRank(r)
+	ranked := q.mergeRanked(r)
+	ranked = q.applyOptionalRerank(ctx, question, ranked)
 
 	vectorIDs := map[string]bool{}
 	for i := range r.factsByVector {
@@ -106,15 +147,19 @@ func (q *Querier) Retrieve(ctx context.Context, question string) (*RetrievalResu
 		graphIDs[r.graphFacts[i].ID] = true
 	}
 
-	out := make([]RankedFact, len(ranked))
+	var out []RankedFact
 	for i := range ranked {
-		out[i] = RankedFact{
-			Fact:       ranked[i].fact,
-			Score:      ranked[i].score,
-			FromVector: vectorIDs[ranked[i].fact.ID],
-			FromText:   textIDs[ranked[i].fact.ID],
-			FromGraph:  graphIDs[ranked[i].fact.ID],
+		if ranked[i].fact == nil {
+			continue
 		}
+		f := ranked[i].fact
+		out = append(out, RankedFact{
+			Fact:       *f,
+			Score:      ranked[i].score,
+			FromVector: vectorIDs[f.ID],
+			FromText:   textIDs[f.ID],
+			FromGraph:  graphIDs[f.ID],
+		})
 	}
 
 	return &RetrievalResult{
@@ -145,7 +190,8 @@ func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResul
 	retrieved := q.retrieve(ctx, question, embedding)
 	retrievalMs := time.Since(retrievalStart).Milliseconds()
 
-	ranked := q.mergeAndRank(retrieved)
+	ranked := q.mergeRanked(retrieved)
+	ranked = q.applyOptionalRerank(ctx, question, ranked)
 
 	enriched := q.enrichWithContext(ctx, ranked, retrieved)
 
@@ -160,7 +206,7 @@ func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResul
 	if err != nil {
 		totalMs := time.Since(totalStart).Milliseconds()
 		q.writeQueryLog(ctx, "query", question, totalMs, retrievalMs, 0,
-			len(ranked), retrieved, 0, embedderAvailable, err.Error())
+			countStructuredFacts(ranked), retrieved, 0, embedderAvailable, err.Error())
 		return nil, fmt.Errorf("query LLM: %w", err)
 	}
 
@@ -169,17 +215,17 @@ func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResul
 	if err != nil {
 		totalMs := time.Since(totalStart).Milliseconds()
 		q.writeQueryLog(ctx, "query", question, totalMs, retrievalMs, synthesisMs,
-			len(ranked), retrieved, 0, embedderAvailable, err.Error())
+			countStructuredFacts(ranked), retrieved, 0, embedderAvailable, err.Error())
 		return nil, fmt.Errorf("parse query response: %w", err)
 	}
 
-	result.FactsConsulted = len(ranked)
+	result.FactsConsulted = countStructuredFacts(ranked)
 
 	q.persistCitations(ctx, result.Citations)
 
 	totalMs := time.Since(totalStart).Milliseconds()
 	q.writeQueryLog(ctx, "query", question, totalMs, retrievalMs, synthesisMs,
-		len(ranked), retrieved, len(result.Citations), embedderAvailable, "")
+		countStructuredFacts(ranked), retrieved, len(result.Citations), embedderAvailable, "")
 
 	q.logger.Info("query complete",
 		"question_len", len(question),
@@ -215,6 +261,10 @@ func (q *Querier) writeQueryLog(ctx context.Context, endpoint, question string,
 		l.FactsByGraph = len(r.graphFacts)
 		l.ChunksByVector = len(r.chunksByVector)
 		l.ChunksByText = len(r.chunksByText)
+		l.HotByVector = len(r.hotByVector)
+		l.HotByText = len(r.hotByText)
+		l.CooldownByVector = len(r.cooldownByVector)
+		l.CooldownByText = len(r.cooldownByText)
 	}
 	if err := q.store.CreateQueryLog(ctx, l); err != nil {
 		q.logger.Warn("failed to write query log", "error", err)
@@ -234,10 +284,11 @@ func (q *Querier) persistCitations(ctx context.Context, citations []model.Citati
 			q.logger.Warn("failed to persist fact citation",
 				"fact_id", c.FactID, "query_id", queryID, "error", err)
 		}
+		// HotMessageID citations are not persisted to fact_citations; no store API yet.
 	}
 }
 
-// retrieve runs all retrieval layers concurrently and collects results.
+// retrieve runs all retrieval layers concurrently and collects results (9 layers when embedding is set).
 // Vector layers are skipped when embedding is nil.
 func (q *Querier) retrieve(ctx context.Context, question string, embedding []float32) *retrievalResult {
 	r := &retrievalResult{}
@@ -245,7 +296,7 @@ func (q *Querier) retrieve(ctx context.Context, question string, embedding []flo
 	var wg sync.WaitGroup
 
 	if embedding != nil {
-		wg.Add(2)
+		wg.Add(4)
 		go func() {
 			defer wg.Done()
 			facts, err := q.store.SearchByVector(ctx, embedding, 20)
@@ -268,9 +319,31 @@ func (q *Querier) retrieve(ctx context.Context, question string, embedding []flo
 			r.chunksByVector = chunks
 			mu.Unlock()
 		}()
+		go func() {
+			defer wg.Done()
+			msgs, err := q.store.SearchHotByVector(ctx, embedding, hotRetrievalLimit)
+			if err != nil {
+				q.logger.Warn("hot vector search failed", "error", err)
+				return
+			}
+			mu.Lock()
+			r.hotByVector = msgs
+			mu.Unlock()
+		}()
+		go func() {
+			defer wg.Done()
+			msgs, err := q.store.SearchCooldownByVector(ctx, embedding, hotRetrievalLimit)
+			if err != nil {
+				q.logger.Warn("cooldown vector search failed", "error", err)
+				return
+			}
+			mu.Lock()
+			r.cooldownByVector = msgs
+			mu.Unlock()
+		}()
 	}
 
-	wg.Add(3)
+	wg.Add(5)
 	go func() {
 		defer wg.Done()
 		sanitized := fts.SanitizeQuery(question)
@@ -308,11 +381,45 @@ func (q *Querier) retrieve(ctx context.Context, question string, embedding []flo
 		r.graphFacts = facts
 		mu.Unlock()
 	}()
+	go func() {
+		defer wg.Done()
+		sanitized := fts.SanitizeQuery(question)
+		if sanitized == "" {
+			return
+		}
+		msgs, err := q.store.SearchHotByText(ctx, sanitized, hotRetrievalLimit)
+		if err != nil {
+			q.logger.Warn("hot text search failed", "error", err)
+			return
+		}
+		mu.Lock()
+		r.hotByText = msgs
+		mu.Unlock()
+	}()
+	go func() {
+		defer wg.Done()
+		sanitized := fts.SanitizeQuery(question)
+		if sanitized == "" {
+			return
+		}
+		msgs, err := q.store.SearchCooldownByText(ctx, sanitized, hotRetrievalLimit)
+		if err != nil {
+			q.logger.Warn("cooldown text search failed", "error", err)
+			return
+		}
+		mu.Lock()
+		r.cooldownByText = msgs
+		mu.Unlock()
+	}()
 
 	wg.Wait()
 	return r
 }
 
+// applyOptionalRerank runs the optional post-merge reranker when configured.
+func (q *Querier) applyOptionalRerank(ctx context.Context, question string, items []rankedItem) []rankedItem {
+	return q.applyRerankToRankedItems(ctx, question, items)
+}
 
 // retrieveByGraph extracts entity names from the question by word matching,
 // looks them up, and traverses the graph for connected facts.
@@ -354,7 +461,35 @@ func (q *Querier) retrieveByGraph(ctx context.Context, question string) []model.
 	return facts
 }
 
-// rankedFact is a fact with its merged score from all retrieval layers.
+// rankedItem is a merged retrieval hit: structured fact or raw hot/cooldown message (HOT-PHASE-SPEC 7.4).
+type rankedItem struct {
+	fact       *model.Fact
+	hotMessage *model.HotMessage
+	score      float64
+	// isRawMessage is true for rows from hot_messages or cooldown_messages (not structured facts).
+	isRawMessage bool
+	// messageCitationPrefix is "hot:" or "cool:" when isRawMessage; empty for facts. Matches RRF merge keys.
+	messageCitationPrefix string
+}
+
+func countStructuredFacts(ranked []rankedItem) int {
+	n := 0
+	for i := range ranked {
+		if ranked[i].fact != nil {
+			n++
+		}
+	}
+	return n
+}
+
+func citationPrefixForMergeID(id string) string {
+	if strings.HasPrefix(id, "cool:") {
+		return "cool:"
+	}
+	return "hot:"
+}
+
+// rankedFact is a fact with score for data-quality metrics (structured facts only).
 type rankedFact struct {
 	fact  model.Fact
 	score float64
@@ -463,12 +598,13 @@ func wordSet(s string) map[string]bool {
 	return m
 }
 
-// mergeAndRank deduplicates facts across all layers and ranks them
-// using Reciprocal Rank Fusion (k=60).
-func (q *Querier) mergeAndRank(r *retrievalResult) []rankedFact {
+// mergeAndRank deduplicates facts and raw messages across all layers using RRF (k=60).
+// Hot and cooldown hits use prefixed keys "hot:" and "cool:" so they do not collide with fact IDs.
+func (q *Querier) mergeAndRank(r *retrievalResult) []rankedItem {
 	const k = 60.0
 	scores := map[string]float64{}
 	facts := map[string]model.Fact{}
+	hotMsgs := map[string]model.HotMessage{}
 
 	for rank := range r.factsByVector {
 		sf := &r.factsByVector[rank]
@@ -488,22 +624,130 @@ func (q *Querier) mergeAndRank(r *retrievalResult) []rankedFact {
 		facts[gf.ID] = *gf
 	}
 
-	now := time.Now().UTC()
-	ranked := make([]rankedFact, 0, len(facts))
-	for id := range facts {
-		f := facts[id]
-		if f.Validity.ValidUntil != nil && f.Validity.ValidUntil.Before(now) {
-			continue
-		}
-		ranked = append(ranked, rankedFact{fact: f, score: scores[id]})
+	for rank := range r.hotByVector {
+		sm := &r.hotByVector[rank]
+		id := "hot:" + sm.Message.ID
+		scores[id] += 1.0 / (k + float64(rank+1))
+		hotMsgs[id] = sm.Message
+	}
+	for rank := range r.hotByText {
+		sm := &r.hotByText[rank]
+		id := "hot:" + sm.Message.ID
+		scores[id] += 1.0 / (k + float64(rank+1))
+		hotMsgs[id] = sm.Message
+	}
+	for rank := range r.cooldownByVector {
+		sm := &r.cooldownByVector[rank]
+		id := "cool:" + sm.Message.ID
+		scores[id] += 1.0 / (k + float64(rank+1))
+		hotMsgs[id] = sm.Message
+	}
+	for rank := range r.cooldownByText {
+		sm := &r.cooldownByText[rank]
+		id := "cool:" + sm.Message.ID
+		scores[id] += 1.0 / (k + float64(rank+1))
+		hotMsgs[id] = sm.Message
 	}
 
-	sortByScore(ranked)
+	now := time.Now().UTC()
+	ranked := make([]rankedItem, 0, len(scores))
+	for id, sc := range scores {
+		if f, ok := facts[id]; ok {
+			if f.Validity.ValidUntil != nil && f.Validity.ValidUntil.Before(now) {
+				continue
+			}
+			fc := new(model.Fact)
+			*fc = f
+			ranked = append(ranked, rankedItem{fact: fc, score: sc})
+			continue
+		}
+		if hm, ok := hotMsgs[id]; ok {
+			hmc := new(model.HotMessage)
+			*hmc = hm
+			ranked = append(ranked, rankedItem{
+				hotMessage:            hmc,
+				score:                 sc,
+				isRawMessage:          true,
+				messageCitationPrefix: citationPrefixForMergeID(id),
+			})
+		}
+	}
+
+	sortRankedItemsByScore(ranked)
 	return ranked
 }
 
-// sortByScore sorts ranked facts in descending order by score.
-func sortByScore(ranked []rankedFact) {
+// mergeSetUnion orders facts like Omni-SimpleMem-style fusion: keep vector hits
+// in similarity order, append FTS5-only hits, then graph-only hits, then hot/cooldown
+// vector and text layers (prefixed keys), with no RRF score. Expired facts are dropped.
+// Positional scores decrease by 0.01 per rank for downstream compatibility.
+func (q *Querier) mergeSetUnion(r *retrievalResult) []rankedItem {
+	now := time.Now().UTC()
+	seen := make(map[string]struct{},
+		len(r.factsByVector)+len(r.factsByText)+len(r.graphFacts)+
+			len(r.hotByVector)+len(r.hotByText)+len(r.cooldownByVector)+len(r.cooldownByText))
+	var out []rankedItem
+
+	tryAddFact := func(f model.Fact) {
+		if f.Validity.ValidUntil != nil && f.Validity.ValidUntil.Before(now) {
+			return
+		}
+		if _, ok := seen[f.ID]; ok {
+			return
+		}
+		seen[f.ID] = struct{}{}
+		pos := len(out)
+		fc := new(model.Fact)
+		*fc = f
+		out = append(out, rankedItem{
+			fact:  fc,
+			score: 1.0 - float64(pos)*0.01,
+		})
+	}
+
+	tryAddHot := func(m model.HotMessage, prefix string) {
+		key := prefix + m.ID
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		pos := len(out)
+		mc := new(model.HotMessage)
+		*mc = m
+		out = append(out, rankedItem{
+			hotMessage:            mc,
+			score:                 1.0 - float64(pos)*0.01,
+			isRawMessage:          true,
+			messageCitationPrefix: prefix,
+		})
+	}
+
+	for i := range r.factsByVector {
+		tryAddFact(r.factsByVector[i].Fact)
+	}
+	for i := range r.factsByText {
+		tryAddFact(r.factsByText[i].Fact)
+	}
+	for i := range r.graphFacts {
+		tryAddFact(r.graphFacts[i])
+	}
+	for i := range r.hotByVector {
+		tryAddHot(r.hotByVector[i].Message, "hot:")
+	}
+	for i := range r.hotByText {
+		tryAddHot(r.hotByText[i].Message, "hot:")
+	}
+	for i := range r.cooldownByVector {
+		tryAddHot(r.cooldownByVector[i].Message, "cool:")
+	}
+	for i := range r.cooldownByText {
+		tryAddHot(r.cooldownByText[i].Message, "cool:")
+	}
+	return out
+}
+
+// sortRankedItemsByScore sorts ranked items in descending order by score (insertion sort, stable enough for typical N).
+func sortRankedItemsByScore(ranked []rankedItem) {
 	for i := 1; i < len(ranked); i++ {
 		for j := i; j > 0 && ranked[j].score > ranked[j-1].score; j-- {
 			ranked[j], ranked[j-1] = ranked[j-1], ranked[j]
@@ -511,9 +755,9 @@ func sortByScore(ranked []rankedFact) {
 	}
 }
 
-// enrichedFact is a ranked fact with optional transcript context.
+// enrichedFact is a ranked item with optional transcript context (facts only).
 type enrichedFact struct {
-	rankedFact
+	rankedItem
 	context       string
 	chunkContexts []string
 }
@@ -521,7 +765,7 @@ type enrichedFact struct {
 // enrichWithContext loads surrounding transcript lines for top-K facts
 // that have source line references, and also loads context from top
 // chunk retrieval results.
-func (q *Querier) enrichWithContext(ctx context.Context, ranked []rankedFact, r *retrievalResult) []enrichedFact {
+func (q *Querier) enrichWithContext(ctx context.Context, ranked []rankedItem, r *retrievalResult) []enrichedFact {
 	const topK = 10
 	limit := topK
 	if len(ranked) < limit {
@@ -530,7 +774,7 @@ func (q *Querier) enrichWithContext(ctx context.Context, ranked []rankedFact, r 
 
 	enriched := make([]enrichedFact, len(ranked))
 	for i := range ranked {
-		enriched[i] = enrichedFact{rankedFact: ranked[i]}
+		enriched[i] = enrichedFact{rankedItem: ranked[i]}
 	}
 
 	if q.transcriptDir == "" {
@@ -538,11 +782,14 @@ func (q *Querier) enrichWithContext(ctx context.Context, ranked []rankedFact, r 
 	}
 
 	for i := 0; i < limit; i++ {
+		if enriched[i].fact == nil {
+			continue
+		}
 		fact := enriched[i].fact
 		if fact.Source.LineRange == nil || fact.Source.TranscriptFile == "" {
 			continue
 		}
-		srcCtx, err := readSourceContext(fact, q.transcriptDir)
+		srcCtx, err := readSourceContext(*fact, q.transcriptDir)
 		if err != nil {
 			q.logger.Debug("failed to read source context",
 				"fact_id", fact.ID, "error", err)
@@ -634,39 +881,50 @@ func (q *Querier) buildPrompt(question string, facts []enrichedFact) builtPrompt
 	var userParts []string
 	userParts = append(userParts, "### Question\n"+question)
 
-	if len(facts) > 0 {
-		var factLines []string
-		for i := range facts {
-			f := &facts[i].fact
-			date := f.CreatedAt.Format("2006-01-02")
-			line := fmt.Sprintf("- [%s] (%s, confidence=%.2f, %s) %s: %s",
-				f.ID, f.FactType, f.Confidence, date, f.Subject, f.Content)
-			factLines = append(factLines, line)
+	fresh := collectFreshMessagesSorted(facts)
+	if len(fresh) > 0 {
+		lines := make([]string, len(fresh))
+		for i := range fresh {
+			lines[i] = formatFreshMessageLine(fresh[i].msg, fresh[i].citationPrefix)
 		}
-		userParts = append(userParts, "### Facts\n"+strings.Join(factLines, "\n"))
+		userParts = append(userParts, "### Fresh Messages (recent, unverified)\n"+strings.Join(lines, "\n"))
+	}
 
-		rf := make([]rankedFact, len(facts))
-		for i := range facts {
-			rf[i] = facts[i].rankedFact
+	var factLines []string
+	var dqInput []rankedFact
+	for i := range facts {
+		if facts[i].fact == nil {
+			continue
 		}
-		dq := computeDataQuality(rf)
+		f := facts[i].fact
+		date := f.CreatedAt.Format("2006-01-02")
+		line := fmt.Sprintf("- [%s] (%s, confidence=%.2f, %s) %s: %s",
+			f.ID, f.FactType, f.Confidence, date, f.Subject, f.Content)
+		factLines = append(factLines, line)
+		dqInput = append(dqInput, rankedFact{fact: *f, score: facts[i].score})
+	}
+	if len(factLines) > 0 {
+		userParts = append(userParts, "### Facts\n"+strings.Join(factLines, "\n"))
+		dq := computeDataQuality(dqInput)
 		userParts = append(userParts, formatDataQuality(dq))
 	}
 
 	var contextParts []string
 	for i := range facts {
 		ef := &facts[i]
-		if ef.context != "" {
-			var header string
-			if ef.fact.Source.LineRange != nil {
-				header = fmt.Sprintf("--- %s lines %d-%d ---",
-					ef.fact.Source.TranscriptFile,
-					ef.fact.Source.LineRange[0], ef.fact.Source.LineRange[1])
-			} else {
-				header = fmt.Sprintf("--- %s ---", ef.fact.Source.TranscriptFile)
-			}
-			contextParts = append(contextParts, header+"\n"+ef.context)
+		if ef.fact == nil || ef.context == "" {
+			contextParts = append(contextParts, ef.chunkContexts...)
+			continue
 		}
+		var header string
+		if ef.fact.Source.LineRange != nil {
+			header = fmt.Sprintf("--- %s lines %d-%d ---",
+				ef.fact.Source.TranscriptFile,
+				ef.fact.Source.LineRange[0], ef.fact.Source.LineRange[1])
+		} else {
+			header = fmt.Sprintf("--- %s ---", ef.fact.Source.TranscriptFile)
+		}
+		contextParts = append(contextParts, header+"\n"+ef.context)
 		contextParts = append(contextParts, ef.chunkContexts...)
 	}
 	if len(contextParts) > 0 {
@@ -677,6 +935,49 @@ func (q *Querier) buildPrompt(question string, facts []enrichedFact) builtPrompt
 		system: querySystemPrompt,
 		user:   strings.Join(userParts, "\n\n"),
 	}
+}
+
+// freshMessageLine is one row for the synthesis prompt (hot or cooldown table).
+type freshMessageLine struct {
+	msg            model.HotMessage
+	citationPrefix string // "hot:" or "cool:" (matches merge / RRF keys)
+}
+
+func collectFreshMessagesSorted(facts []enrichedFact) []freshMessageLine {
+	seen := map[string]struct{}{}
+	var out []freshMessageLine
+	for i := range facts {
+		if facts[i].hotMessage == nil {
+			continue
+		}
+		m := facts[i].hotMessage
+		if _, ok := seen[m.ID]; ok {
+			continue
+		}
+		seen[m.ID] = struct{}{}
+		prefix := facts[i].messageCitationPrefix
+		if prefix == "" {
+			prefix = "hot:"
+		}
+		out = append(out, freshMessageLine{msg: *m, citationPrefix: prefix})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].msg.Timestamp.After(out[j].msg.Timestamp)
+	})
+	return out
+}
+
+func formatFreshMessageLine(m model.HotMessage, citationPrefix string) string {
+	ts := m.Timestamp.Format("2006-01-02 15:04")
+	suffix := ""
+	if m.LinkerRef != "" {
+		suffix = fmt.Sprintf(" (->%s)", m.LinkerRef)
+	}
+	tag := strings.TrimSuffix(citationPrefix, ":")
+	if tag == "" {
+		tag = "hot"
+	}
+	return fmt.Sprintf("- [%s:%s] (%s, %s%s): %s", tag, m.ID, m.Speaker, ts, suffix, m.Content)
 }
 
 func formatDataQuality(dq dataQualityMetrics) string {
@@ -697,10 +998,10 @@ func formatDataQuality(dq dataQualityMetrics) string {
 
 // rawQueryResponse is the JSON shape the LLM returns for queries.
 type rawQueryResponse struct {
-	Answer     string          `json:"answer"`
+	Answer     string           `json:"answer"`
 	Citations  []model.Citation `json:"citations"`
-	Confidence float64         `json:"confidence"`
-	Notes      string          `json:"notes"`
+	Confidence float64          `json:"confidence"`
+	Notes      string           `json:"notes"`
 }
 
 // parseResponse extracts a QueryResult from the LLM's JSON response.
@@ -771,10 +1072,10 @@ const querySystemPrompt = `You are a knowledge retrieval system. You receive a q
 
 Return a single JSON object with this exact structure:
 
-{"answer": "<your answer, 1-5 sentences>", "citations": [{"fact_id": "<ID of fact used>"}, {"consolidation_id": "<ID of consolidation used>"}], "confidence": <0.0 to 1.0>, "notes": "<optional: contradictions, gaps, or caveats>"}
+{"answer": "<your answer, 1-5 sentences>", "citations": [{"fact_id": "<ID of fact used>"}, {"consolidation_id": "<ID of consolidation used>"}, {"hot_message_id": "hot:<ULID> or cool:<ULID>"}], "confidence": <0.0 to 1.0>, "notes": "<optional: contradictions, gaps, or caveats>"}
 
 Rules:
-1. Use ONLY the provided facts, consolidations, and transcript context. Do not use external knowledge.
+1. Use ONLY the provided facts, consolidations, transcript context, and any Fresh Messages section. Do not use external knowledge.
 2. Cite every fact or consolidation that contributed to your answer.
 3. If multiple facts contradict each other, mention the contradiction in "notes" and base the answer on the most recent or highest-confidence fact.
 4. If a fact has been superseded, prefer the newer fact.
@@ -786,4 +1087,9 @@ Rules:
    - If average confidence < 0.6 or fewer than 3 facts found, set your confidence below 0.5 and add a caveat (e.g. "Based on limited/low-confidence data: ...").
    - If superseded facts are present, note this and prefer non-superseded facts.
    - If age spread > 30 days, consider that older facts may be outdated.
-   - If source diversity = 1, note that all information comes from a single source.`
+   - If source diversity = 1, note that all information comes from a single source.
+10. Fresh messages: A "Fresh Messages" section may be included. These are raw, unverified messages from recent conversations. They are the most current information but have not been verified through extraction.
+    - When fresh messages confirm or update a structured fact, prefer the fresh message (it is newer).
+    - When fresh messages contain a proposal or question (not a confirmed decision), mention it as "currently under discussion" -- do not present it as a decided fact.
+    - When fresh messages contradict a high-confidence fact, show both and note the potential change.
+    - You cannot cite fresh messages by fact_id. Use hot_message_id with the same prefix as in Fresh Messages: "hot:<ULID>" for hot-layer rows or "cool:<ULID>" for cooldown-layer rows (match the bracket tag shown in the prompt).`

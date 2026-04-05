@@ -8,7 +8,7 @@ Frontmatter parser: `internal/transcript/frontmatter.go`. Platform adapters: `in
 
 ## 1. Overview
 
-Agent platforms (Cursor, Claude Code, OpenClaw, Craft Agents) store conversation transcripts as JSONL files with incompatible schemas. Imprint needs a single, stable input contract so that:
+Agent platforms (Cursor, Claude Code, OpenClaw, and others) store conversation transcripts as JSONL files with incompatible schemas. Imprint needs a single, stable input contract so that:
 
 - Each platform requires only one small adapter (20-30 lines)
 - Imprint's BatchAdapter processes one format, not four
@@ -40,11 +40,13 @@ Files without frontmatter (plain `.txt` or `.md`) continue to work unchanged. Fr
 
 | Field | Type | Required | Description | Maps to |
 |-------|------|----------|-------------|---------|
-| `source` | string | yes | Platform that produced the transcript | -- |
-| `session` | string | yes | Session ID on the source platform | -- |
+| `source` | string | yes* | Platform that produced the transcript | -- |
+| `session` | string | yes* | Session ID on the source platform | -- |
 | `date` | string (ISO-8601) | no | Session start timestamp | `transcripts.date` |
 | `participants` | string[] | no | Participant names or roles | `transcripts.participants` (JSON array) |
 | `topic` | string | no | Session topic or title, if known | `transcripts.topic` |
+
+*\*Required by adapter convention, not enforced by the parser. The frontmatter parser (`internal/transcript/frontmatter.go`) returns empty strings for missing fields without error. Adapters are expected to always provide these fields (see section 6), but files with missing `source` or `session` will still be ingested -- they just won't have platform metadata or session-boundary supersede.*
 
 ### Field details
 
@@ -240,16 +242,18 @@ You need to set the connection string...
 
 Notes: OpenClaw uses tree structure (`parentId`); the adapter linearizes messages in chronological order. Tool messages are stripped. Roles map directly (`user` -> `user`, `assistant` -> `assistant`).
 
-### 5.4 Craft Agents
+### 5.4 Craft Agents (planned)
 
-**Input** (JSONL, same schema as Claude Code via shared SDK):
+**Status: No adapter implemented yet.** Craft Agents uses the Claude Agent SDK, so the JSONL schema is expected to be identical to Claude Code. When implemented, the adapter would differ only in the `source` field value and the session directory path.
+
+**Expected input** (JSONL, same schema as Claude Code via shared SDK):
 
 ```json
 {"type":"human","uuid":"h-001","sessionId":"craft-sess-001","timestamp":"2026-03-15T14:30:00Z","text":"How do I configure the database?"}
 {"type":"assistant","uuid":"a-001","parentUuid":"h-001","sessionId":"craft-sess-001","timestamp":"2026-03-15T14:30:05Z","text":"You need to set the connection string...","thinking":"Checking config..."}
 ```
 
-**Output** (annotated markdown):
+**Expected output** (annotated markdown):
 
 ```markdown
 ---
@@ -265,8 +269,6 @@ How do I configure the database?
 [2026-03-15T14:30:05Z] assistant:
 You need to set the connection string...
 ```
-
-Notes: Craft Agents uses the Claude Agent SDK, so the JSONL schema is identical to Claude Code. The adapter differs only in the `source` field value and the session directory path.
 
 ---
 
