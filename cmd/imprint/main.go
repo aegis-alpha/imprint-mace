@@ -1580,7 +1580,10 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 		qOpts = append(qOpts, query.WithMergeStrategy(mergeStrategy))
 	}
 	var rr query.Reranker
-	rerankProviders := providerConfigsForTask(cfg, "rerank")
+	var rerankProviders []model.ProviderConfig
+	if cfg != nil {
+		rerankProviders = providerConfigsForTask(cfg, "rerank")
+	}
 	if cfg != nil && !prismModeEnabled(cfg) && len(rerankProviders) > 1 {
 		logger.Warn("eval: multiple [[providers.reranker]] entries configured; only the first is used")
 	}
