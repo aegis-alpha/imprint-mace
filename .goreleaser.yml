@@ -6,8 +6,7 @@ builds:
     binary: imprint
     env:
       - CGO_ENABLED=1
-      - CGO_CFLAGS=-I/usr/local/include
-      - CGO_LDFLAGS=-L/usr/local/lib -lusearch_c
+      - CGO_LDFLAGS=-lusearch_c
     tags:
       - sqlite_fts5
     ldflags:
