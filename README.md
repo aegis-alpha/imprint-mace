@@ -28,57 +28,74 @@ AI agents forget everything between sessions. Every conversation starts from zer
 
 Imprint watches transcript files, extracts facts, entities, and relationships, discovers connections between them, and autonomously evolves its type taxonomy based on what it sees. Conversation transcripts on disk are the source of truth -- the database is a derived index. Every fact links back to the exact lines in the original file, so you can always verify, enrich, and cross-reference.
 
+**Hot phase (v0.5.0):** When hot phase is enabled, incoming messages are stored immediately for instant search -- no LLM extraction, no latency, no cost. Messages are queryable within milliseconds via FTS5 and USearch HNSW vector search. After a configurable TTL (default 60 minutes), messages move to cooldown where they remain searchable. The query pipeline searches all three phases (hot, cooldown, cold) simultaneously -- knowledge never disappears. Hot messages appear in query results as "Fresh Messages" alongside structured facts.
+
 ## Architecture
 
 ```
-  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-  │ Text files   │  │ Realtime API │  │ File watcher │
-  │ (transcripts)│  │ (HTTP/MCP)   │  │ (cron/poll)  │
-  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘
-         │                 │                  │
-  ┌──────▼────────┐        │                  │
-  │ Batch Adapter │        │                  │
-  │ (chunk, dedup)│        │                  │
-  └──────┬────────┘        │                  │
-         └────────┬────────┘──────────────────┘
+  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐
+  │ Text files   │  │ Realtime API     │  │ File watcher │
+  │ (transcripts)│  │ (HTTP/MCP hooks) │  │ (cron/poll)  │
+  └──────┬───────┘  └──────┬───────────┘  └──────┬───────┘
+         │                 │                      │
+  ┌──────▼────────┐   ┌────▼────────┐            │
+  │ Batch Adapter │   │ Hot Ingest  │            │
+  │ (chunk, dedup)│   │ (if enabled)│            │
+  └──────┬────────┘   └────┬────────┘            │
+         │                 │                      │
+         │          ┌──────▼───────────┐          │
+         │          │  hot_messages    │          │
+         │          │  (raw, FTS5+vec) │          │
+         │          │  TTL -> cooldown │          │
+         │          └──────────────────┘          │
+         │                                        │
+         └────────┬──────────────────────────────┘
                   │
          ┌────────▼──────────┐
-         │  Engine.Ingest()  │
+         │  Engine.Ingest()  │  (Cold Path)
          │                   │
          │  1. Extract (LLM) │──── Provider Chain (Google/Anthropic/Ollama)
-         │  2. Embed         │──── Embedder Chain (OpenAI/Ollama)
+         │  2. Embed         │──── Embedder Chain (OpenAI/Voyage/Ollama)
          │  3. Store         │──── DB (SQLite + USearch sidecar)
          │  4. Log           │──── extraction_log
          └────────┬──────────┘
                   │
     ┌─────────────┼──────────────────┐
     │             │                  │
-┌───▼──────┐ ┌────▼─────┐  ┌─────────▼──────────────┐
-│Consoli-  │ │Taxonomy  │  │  Query                 │
-│dation    │ │Evolution │  │  1. Vector (facts)     │
-│(bg loop) │ │(bg loop) │  │  2. Vector (chunks)    │
-└──────────┘ └──────────┘  │  3. FTS5 (chunks)      │
-                           │  4. Graph traversal    │
-                           │  5. ReadContext (disk) │
-                           │  6. LLM synthesis      │
-                           └──────────┬─────────────┘
+┌───▼──────┐ ┌────▼─────┐  ┌─────────▼──────────────────────┐
+│Consoli-  │ │Taxonomy  │  │  Query (9 layers)              │
+│dation    │ │Evolution │  │  1. Hot vector   (USearch)     │
+│(bg loop) │ │(bg loop) │  │  2. Hot FTS5                   │
+└──────────┘ └──────────┘  │  3. Cooldown vector (USearch)  │
+                           │  4. Cooldown FTS5              │
+                           │  5. Fact vector    (USearch)   │
+                           │  6. Fact FTS5                  │
+                           │  7. Chunk vector   (USearch)   │
+                           │  8. Chunk FTS5                 │
+                           │  9. Graph traversal            │
+                           │  -> RRF merge                  │
+                           │  -> ReadContext (disk)         │
+                           │  -> LLM synthesis              │
+                           └──────────┬─────────────────────┘
                                       │
-                  ┌───────────────────┼───────────────────┐
-                  │                   │                   │
-         ┌────────▼─────────┐ ┌───────▼───────┐  ┌────────▼────────┐
-         │    DB Layer      │ │  Transcript   │  │  Transport      │
-         │  SQLite + USearch│ │  Files (disk) │  │  HTTP/MCP/CLI   │
-         │                  │ │  (source of   │  │                 │
-         │  facts, entities │ │   truth)      │  │                 │
-         │  relationships   │ │               │  │                 │
-         │  consolidations  │ └───────────────┘  └─────────────────┘
+                  ┌───────────────────┼───────────────────────────┐
+                  │                   │                           │
+         ┌────────▼─────────┐ ┌───────▼───────┐  ┌──────────▼──────────┐
+         │    DB Layer      │ │  Transcript   │  │  Transport          │
+         │  SQLite + USearch│ │  Files (disk) │  │  HTTP/MCP/CLI       │
+         │                  │ │  (source of   │  │                     │
+         │  facts, entities │ │   truth)      │  │                     │
+         │  relationships   │ │               │  │                     │
+         │  consolidations  │ └───────────────┘  └─────────────────────┘
+         │  hot_messages    │
+         │  cooldown_msgs   │
          │  transcript meta │
          │  taxonomy signals│
          │  extraction_log  │
          └──────────────────┘
 ```
 
-*Note: the diagram is simplified -- FTS5 is shown once but the code runs two separate FTS5 layers (facts + chunks).*
+*Note: When hot phase is disabled (default), the diagram simplifies -- no hot_messages/cooldown_messages tables, query uses 5 layers instead of 9.*
 
 **Library-first.** The core is a set of Go functions -- `ingest`, `query`, `consolidate`, `status`. Transport wrappers (HTTP API, MCP server, CLI) are thin layers on top. You can embed Imprint directly in your Go application or run it as a standalone service.
 
@@ -92,7 +109,8 @@ Imprint watches transcript files, extracts facts, entities, and relationships, d
 - **Ingest (realtime):** text via API -> Engine.Ingest() -> same path
 - **Consolidation (background):** unconsolidated facts -> LLM grouping -> insights + fact connections
 - **Taxonomy evolution (background):** signals from extraction log -> LLM review -> validated proposals -> auto-apply
-- **Query:** question -> 5 parallel retrieval layers (vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph traversal) -> RRF merge -> ReadContext enrichment from disk -> LLM synthesis -> answer with citations
+- **Query:** question -> parallel retrieval (cold: vector facts, vector chunks, FTS5 facts, FTS5 chunks, graph; when enabled: hot + cooldown vector/text) -> RRF or set-union merge -> optional post-merge rerank (fact prefix only) -> ReadContext enrichment from disk -> LLM synthesis -> answer with citations (`facts_consulted` counts structured facts only; raw messages may appear in Fresh Messages as `[hot:…]` / `[cool:…]`).
+- **Hot phase (opt-in, `[hot]` in config):** HTTP/MCP ingest can store raw messages without extraction; TTL moves them to cooldown; query merge includes both layers. Use `mode: "extract"` on ingest to force the LLM extraction path while hot is enabled.
 
 ## Self-Improving Architecture
 
@@ -449,13 +467,14 @@ Run manually: `imprint optimize`. Runs automatically after `ingest-dir`, `watch`
 ### What works
 
 - **Knowledge extraction:** facts, entities, and relationships from any text via LLM, with semantic dedup and configurable type taxonomy
-- **Hybrid query:** 5 parallel retrieval layers (vector, FTS5, graph), RRF merge, ReadContext enrichment from source files, LLM synthesis with citations
+- **Hot-Cool-Cold Pipeline (Phase 1, v0.5.0):** realtime messages stored raw for instant search (zero LLM cost). TTL moves messages from hot to cooldown. Query searches all three phases (9 layers: hot vector, hot FTS5, cooldown vector, cooldown FTS5, fact vector, fact FTS5, chunk vector, chunk FTS5, graph). Hot messages appear in results as "Fresh Messages" alongside structured facts. Phase 2 (cool phase extraction with topic segmentation) is designed but not yet implemented.
+- **Hybrid query:** 9 parallel retrieval layers when hot enabled (5 when disabled), RRF or set-union merge, optional post-merge reranking, ReadContext enrichment from source files, LLM synthesis with citations
 - **Self-evolving taxonomy:** signal collection from extraction results, LLM review, validated proposals, auto-apply -- fully autonomous
-- **Dual-layer memory:** realtime ingest via hooks/API (temporary, session-scoped) + batch ingest from transcript files (permanent, with source references). Session-boundary supersede.
 - **Platform integrations:** deterministic hooks for OpenClaw, Cursor, Claude Code, Gemini CLI. MCP server (8 tools) for any MCP client. HTTP API (9 main + 3 admin endpoints).
 - **Consolidation:** background grouping of related facts, connection discovery, higher-order insights
 - **Transcript-first storage:** files on disk are the source of truth, DB is a derived index with back-references to file + line range
 - **Self-editing memory:** agents can update fact metadata or supersede facts with corrected content via MCP tools or HTTP API
+- **USearch HNSW vector index:** single `.vecindex` sidecar file, 247x faster than sqlite-vec (~1.1ms vs ~272ms at 200K scale), f16 quantization, SQLite embedding BLOBs as source of truth
 - **Eval harness:** extraction eval (CaRB-style P/R/F1, NRR, ECE, composite score) + retrieval eval (Recall@10, MRR, per-layer contribution, graceful degradation delta). Built-in golden datasets for both.
 - **Self-tuning quality:** 6 quality signal collectors (supersede rate, citation rate, volume anomaly, entity collision rate, confidence calibration, confidence-citation calibration), Karpathy loop for automatic prompt optimization, query_log instrumentation
 - **17 CLI subcommands**, 405 tests, Docker deployment with Watchtower auto-update
@@ -492,7 +511,8 @@ Measured on commodity hardware (single-core SQLite, no tuning).
 | Provider chain with auto-healing | No single point of failure. If one LLM is down, the next is tried automatically. Error classification (transient vs auth vs model-not-found) drives retry logic. Exhausted providers are flagged in the knowledge base. Model substitution via prefix matching when configured models disappear. |
 | Transcripts as source of truth | DB is a derived index. Files on disk hold the full conversation. Facts back-reference file + line range. Query enriches from disk. |
 | Embedding model metadata | Each embedding stored with model name. On provider switch: selective re-embedding or adapter -- no full re-embedding needed. |
-| USearch sidecar index | Vector ANN lives in a `.vecindex` file next to the DB; dimensions come from config at runtime. Embeddings are also stored as BLOBs on rows for durability. |
+| USearch sidecar index | Vector ANN lives in a `.vecindex` file next to the DB; dimensions come from config at runtime. Embeddings are also stored as BLOBs on rows for durability. 247x faster than sqlite-vec at 200K scale. |
+| Hot phase (opt-in) | Raw message storage with instant FTS5 + vector search (zero LLM cost). TTL moves messages to cooldown. Query searches hot + cooldown + cold simultaneously. Messages never disappear. Replaces D27 realtime extraction path. |
 
 ## Contributing
 

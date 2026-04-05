@@ -12,14 +12,19 @@ All responses are JSON with `Content-Type: application/json`. Errors return `{"e
 
 ### POST /ingest
 
-Extract facts, entities, and relationships from text.
+Behavior depends on config `[hot].enabled` and optional request field `mode`.
+
+#### Cold path (default, or hot disabled, or `mode: "extract"`)
+
+Runs LLM extraction: facts, entities, and relationships.
 
 **Request:**
 
 ```json
 {
   "text": "Alice decided to use Go for Acme.",
-  "source": "session-42"
+  "source": "session-42",
+  "mode": "extract"
 }
 ```
 
@@ -27,6 +32,7 @@ Extract facts, entities, and relationships from text.
 |-------|------|----------|---------|-------------|
 | `text` | string | yes | -- | Text to extract knowledge from |
 | `source` | string | no | `"api"` | Source identifier for provenance |
+| `mode` | string | no | (omit) | Set to `"extract"` to force cold path even when `[hot]` is enabled |
 
 **Response (200):**
 
@@ -43,6 +49,28 @@ Extract facts, entities, and relationships from text.
 }
 ```
 
+#### Hot path (`[hot].enabled = true` and `mode` is not `"extract"`)
+
+Stores one raw message per request (no extraction LLM). Optional synchronous embedding when `len(text) >= embed_min_chars` and an embedder chain is configured.
+
+**Request:** same JSON shape; `source` may use prefix `realtime:` so the remainder becomes `platform_session_id` (see `spec/HOT-PHASE-SPEC.md`).
+
+**Response (200):**
+
+```json
+{
+  "id": "01JQ...",
+  "has_embedding": true,
+  "hot": true
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | New hot message ULID |
+| `has_embedding` | bool | Whether a vector was stored for this message |
+| `hot` | bool | Always `true` for this path |
+
 ### GET /query?q=...
 
 Ask a question against the knowledge base.
@@ -58,11 +86,20 @@ Ask a question against the knowledge base.
   "answer": "Acme is written in Go.",
   "citations": [
     {"fact_id": "01JFA..."},
-    {"consolidation_id": "01JFD..."}
+    {"consolidation_id": "01JFD..."},
+    {"hot_message_id": "hot:01JQ..."},
+    {"hot_message_id": "cool:01JR..."}
   ],
-  "facts_consulted": 12
+  "facts_consulted": 8
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `answer` | string | Synthesized answer |
+| `citations` | array | Each object may include `fact_id`, `consolidation_id`, and/or `hot_message_id` |
+| `hot_message_id` | string | Raw message citation: `hot:<ULID>` or `cool:<ULID>` (matches Fresh Messages tags in the synthesis prompt) |
+| `facts_consulted` | number | Count of **structured facts** in the merged retrieval list passed to synthesis (excludes hot/cooldown raw rows) |
 
 ### GET /status
 
@@ -72,13 +109,15 @@ Database statistics, wrapped with version info.
 
 ```json
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "stats": {
     "facts": 142,
     "entities": 38,
     "relationships": 67,
     "consolidations": 5,
-    "ingested_files": 12
+    "ingested_files": 12,
+    "hot_messages": 23,
+    "cooldown_messages": 156
   },
   "quality_signals": [
     {
@@ -332,14 +371,17 @@ Start with `imprint mcp`. Runs over stdio (JSON-RPC). Compatible with Cursor, Cl
 
 ### imprint_ingest
 
-Extract facts, entities, and relationships from text.
+Same branching as HTTP `POST /ingest`: cold extraction by default; hot raw ingest when `[hot].enabled` is true unless `mode` is `"extract"`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `text` | string | yes | Text to extract knowledge from |
-| `source` | string | no | Source identifier (default: `"mcp"`) |
+| `text` | string | yes | Text to ingest |
+| `source` | string | no | Source identifier (default: `"mcp"`); `realtime:<session>` sets platform session id |
+| `mode` | string | no | `"extract"` forces LLM extraction even when hot is enabled |
 
-Returns JSON with `facts_count`, `entities_count`, `relationships_count`, and ID arrays.
+**Cold response:** JSON with `facts_count`, `entities_count`, `relationships_count`, and ID arrays.
+
+**Hot response:** JSON with `id`, `has_embedding`, `hot` (see HTTP hot path above).
 
 ### imprint_query
 
@@ -349,7 +391,7 @@ Ask a question against the knowledge base.
 |-----------|------|----------|-------------|
 | `question` | string | yes | Natural language question |
 
-Returns JSON with `answer`, `citations`, and `facts_consulted`.
+Returns JSON with `answer`, `citations`, and `facts_consulted`. Citations may include `hot_message_id` (`hot:` or `cool:` prefix). `facts_consulted` counts structured facts only, not raw hot/cooldown rows.
 
 **Note:** The LLM also returns `confidence` and `notes` fields, but these are parsed and discarded by `parseResponse` -- they do not appear in the response. See ARCHITECTURE.md section 2.4.
 
@@ -357,7 +399,7 @@ Returns JSON with `answer`, `citations`, and `facts_consulted`.
 
 Show knowledge base statistics. No parameters.
 
-Returns JSON with `facts`, `entities`, `relationships`, `consolidations`, `ingested_files`.
+Returns JSON with `facts`, `entities`, `relationships`, `consolidations`, `ingested_files`, `hot_messages`, `cooldown_messages`.
 
 ### imprint_entities
 
@@ -471,7 +513,7 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `export` | `[--format=json\|csv] [--output=path]` | Export entire knowledge base |
 | `eval` | `--golden=PATH [--format=json\|table] [--save-baseline] [--check] [--threshold=N]` | Evaluate extraction quality against a golden dataset. Baseline is managed automatically: first run becomes baseline, subsequent runs update it on improvement. `--save-baseline` forces a manual override. `--check` compares with baseline and exits non-zero on regression. Default threshold: 0.05. |
 | `eval generate` | `[--output=PATH]` | Generate built-in golden eval dataset (default: `testdata/golden/`) |
-| `eval-retrieval` | `[--format=json\|table] [--no-embedder] [--save-baseline] [--check] [--threshold=N]` | Evaluate retrieval quality (Recall@10, MRR). `--no-embedder` runs text+graph only. Same auto-baseline behavior as `eval`. |
+| `eval-retrieval` | `[--format=json\|table] [--no-embedder] [--merge-strategy=rrf\|set-union] [--save-baseline] [--check] [--threshold=N]` | Evaluate retrieval quality (Recall@10, MRR). `--no-embedder` runs text+graph only. `--merge-strategy` selects RRF (default) or set-union dense-first ordering. Same auto-baseline behavior as `eval`. |
 | `eval-history` | `[--type=extraction\|retrieval] [--limit=N]` | Show eval score history with deltas and baseline markers. Default limit: 10. |
 | `optimize` | -- | Run one prompt optimization cycle (Karpathy loop). After optimization, automatically runs both extraction and retrieval evals, persists results, and updates baselines. This is the primary way eval history accumulates. |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
@@ -550,6 +592,9 @@ imprint eval-retrieval --no-embedder
 
 # Evaluate retrieval with JSON output
 imprint eval-retrieval --format=json
+
+# Evaluate retrieval with set-union merge strategy
+imprint eval-retrieval --merge-strategy=set-union
 
 # Evaluate retrieval and save as baseline
 imprint eval-retrieval --no-embedder --save-baseline

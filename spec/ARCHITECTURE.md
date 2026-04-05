@@ -27,11 +27,11 @@ All text enters the system through `Engine.Ingest()`. There are three paths to r
 
 ### 1.2 Realtime Ingest
 
-Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). No chunking, no dedup, no transcript registration -- the text goes directly to `Engine.Ingest()`.
+Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). The behavior depends on whether hot phase is enabled in config.
 
-**Note:** The HTTP `POST /ingest` endpoint accepts only `text` and `source` fields. The `WithSessionID` ingest option exists in the Engine but is not exposed via the HTTP handler -- it is only reachable through direct Engine calls (e.g. from hooks).
+**When hot phase disabled (default):** Text goes directly to `Engine.Ingest()` (section 1.3). No chunking, no dedup, no transcript registration. Each call triggers LLM extraction (2-10 seconds depending on text length and provider).
 
-**Performance note:** Each `Engine.Ingest()` call triggers one LLM extraction (2-10 seconds depending on text length and provider). For bulk operations, callers should process items sequentially with retry and backoff, not in parallel. Concurrent LLM calls risk rate limits and timeouts.
+**When hot phase enabled:** Text is stored in `hot_messages` table (section 1.2b). Zero LLM cost, instant search, no extraction. This is the hot path.
 
 **OpenClaw integration:** Two deterministic integration paths:
 
@@ -40,9 +40,29 @@ Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). N
 
 **Service discovery:** The server writes its actual listen address to `~/.imprint/serve.json` on startup. If the configured port is busy, it tries the next available port (up to +20). Hooks and other clients read this file to discover the server automatically. The file is removed on graceful shutdown.
 
-### 1.3 Engine.Ingest()
+### 1.2b Hot Ingest
 
-`internal/imprint.Engine` is the single canonical path for all ingestion.
+When `[hot] enabled = true` in config, `POST /ingest` and `imprint_ingest` store raw messages in the `hot_messages` table instead of calling `Engine.Ingest()`. This is the hot path: zero LLM cost, instant search, no extraction.
+
+**Flow:**
+
+1. **Store raw.** Message stored with speaker, content, timestamp, platform metadata, and linker_ref (connects to reply target).
+2. **Selective embedding.** Messages with `len(content) >= 50` get an embedding (E021 result: 22% cost saving, zero recall loss). Shorter messages get `has_embedding = 0`.
+3. **FTS5 indexing.** Message content indexed in `hot_messages_fts` for keyword search.
+4. **Vector indexing.** If embedding succeeds, stored in both: (a) `hot_messages.embedding` BLOB (source of truth), (b) USearch index with key `"hot:"+messageID` (cache for fast search).
+5. **Queryable immediately.** Message is searchable via FTS5 and vector within milliseconds. No extraction latency.
+
+**Override:** The `mode=extract` parameter forces LLM extraction even when hot is enabled. This is for manual/testing use. Normal callers (hooks, agents) never set it.
+
+**Response:** Returns `{"id": "<ulid>", "has_embedding": true, "hot": true}` instead of the extraction result. The `hot: true` field helps callers identify which path was taken.
+
+**TTL:** Messages move from hot to cooldown after configurable TTL (default 60 minutes). A background goroutine in `runServe` calls `store.MoveHotToCooldown()` every `tick_seconds` (default 60). Messages remain searchable in cooldown -- they never disappear from query results.
+
+**When hot is disabled:** `POST /ingest` behaves identically to the current version (calls `Engine.Ingest()`, returns extraction result). The hot path is completely inactive when `[hot] enabled = false` (default).
+
+### 1.3 Engine.Ingest() (Cold Path)
+
+`internal/imprint.Engine` is the canonical path for extraction-based ingestion. When hot phase is enabled, this is the cold path -- it is bypassed for per-message realtime ingest, but still used for batch transcript processing.
 
 1. **Extract.** Send text to the LLM via `Extractor.Extract()`. Returns facts, entities, and relationships.
 2. **Attach source.** If `WithLineOffset` was set, stamp every fact with the source file path and line range.
@@ -61,27 +81,15 @@ Text arrives via the HTTP API (`POST /ingest`) or MCP tool (`imprint_ingest`). N
 - The `Extractor` hydrates the raw LLM output: generates ULID IDs, sets timestamps, attaches source info.
 - Every extraction call is logged to `extraction_log` (provider, model, tokens, duration, counts, errors) via `ExtractionLogger`.
 
-### 1.5 Dual-Layer Memory (D27)
+### 1.5 Dual-Layer Memory (Superseded by Hot Phase)
 
-Realtime and batch ingest coexist for the same session. Realtime facts are fast but coarse; batch facts are richer (full file references, line ranges). When batch catches up, it supersedes the realtime facts.
+**Note:** The D27 realtime path (`WithSessionID`, `SupersedeRealtimeBySession`) was removed in v0.5.0. Hot-Cool-Cold Pipeline (section 1.7) replaces it. Raw messages are stored in hot phase at zero LLM cost instead of extracted as temporary facts. No supersede needed -- messages never produce temporary facts.
 
-**Realtime path:**
+**Legacy:** Existing `realtime:*` facts in the database (from pre-v0.5.0 deployments) remain as historical data. No new `realtime:*` facts are created.
 
-1. `WithSessionID(id)` is an `IngestOption` that stamps all extracted facts with `realtime:{sessionID}` in the `source_file` field.
-2. The OpenClaw `imprint-ingest` hook calls `POST /ingest` on every message, passing the session ID. Facts are available immediately but lack file-level source references.
+### 1.7 Hot-Cool-Cold Pipeline (Phase 1: v0.5.0)
 
-**Batch supersede:**
-
-1. When `BatchAdapter.processFile()` processes a transcript, it reads the `session` field from YAML frontmatter.
-2. After ingesting all chunks, if `session` is non-empty, it calls `store.SupersedeRealtimeBySession(sessionID)`.
-3. This marks all facts where `source_file = 'realtime:{sessionID}'` as superseded (`superseded_by = 'batch-replaced'`).
-4. The batch facts replace them with full file references and line ranges.
-
-**Design constraint:** Cosine similarity is not used for cross-path supersede. Simulation (D002) showed a 73% miss rate due to granularity drift between realtime single-message facts and batch multi-message chunk facts. Session-boundary supersede is deterministic and reliable.
-
-### 1.7 Hot-Cool-Cold Pipeline (D31-D35)
-
-**Status: Designed, not yet implemented.** Replaces per-message extraction (28% capture rate) with streaming storage + delayed topic-scoped extraction.
+**Status: Phase 1 implemented (BVP-352, BVP-353, BVP-358).** Replaces per-message extraction (28% capture rate) with streaming storage + delayed topic-scoped extraction. Phase 2 (cool phase extraction) is designed but not yet implemented.
 
 Core insight: the original problem framing ("how to extract from a stream") was wrong. The right framing: "how to make raw messages queryable immediately, and extract with full context later."
 
@@ -89,15 +97,16 @@ Core insight: the original problem framing ("how to extract from a stream") was 
 Message arrives (from hook/API)
     |
     v
-[HOT PHASE] -- raw store, TTL ~1h, zero LLM cost
-    |  1. Store raw message (speaker, content, timestamp, platform metadata)
+[HOT PHASE] -- raw store, TTL ~1h, zero LLM cost [IMPLEMENTED]
+    |  1. Store raw message (speaker, content, timestamp, platform metadata, linker_ref)
     |  2. Selective embed (messages >= 50 chars get embedding)
-    |  3. FTS5 index
-    |  4. Queryable immediately via FTS5 + embed
+    |  3. FTS5 index (hot_messages_fts)
+    |  4. USearch HNSW index (key "hot:"+messageID)
+    |  5. Queryable immediately via FTS5 + vector search
     |
-    | (TTL expires, message copied to cooldown)
+    | (TTL expires, message copied to cooldown via background goroutine)
     v
-[COOL PHASE] -- topic clustering + extraction
+[COOL PHASE] -- topic clustering + extraction [DESIGNED, NOT YET IMPLEMENTED]
     |  1. Messages accumulate in cooldown_messages table
     |  2. Hybrid Union topic segmentation (TreeSeg + TT+Merge, D32)
     |  3. Cluster readiness: topic silence (8h) or cluster size (50 msgs)
@@ -109,29 +118,35 @@ Message arrives (from hook/API)
 [COLD PHASE] -- permanent store (existing infrastructure)
     Facts + Entities + Relationships
     Transcripts on disk
-    Consolidation, Karpathy loop, 5-layer retrieval
+    Consolidation, Karpathy loop, retrieval
 ```
 
-**Two tables (D35):** `hot_messages` (raw, fast for realtime query) and `cooldown_messages` (same base + cluster_id, transcript linking, processing status). Separate tables prevent SQLite single-writer contention between realtime query and background processing.
+**Two tables (D35):** `hot_messages` (raw, fast for realtime query) and `cooldown_messages` (same base + cluster_id, transcript linking, processing status). Separate tables prevent SQLite single-writer contention between realtime query and background processing. Both tables have embedding BLOB columns and FTS5 virtual tables.
 
-**Topic segmentation (D32):** Hybrid Union algorithm (TreeSeg + TT+Merge, boundary union). Determines WHEN to extract (cluster readiness) and WHICH messages form a block. Does NOT reorder messages -- extraction receives chronological order. Experiment showed topic-based reordering adds no extraction quality.
+**TTL goroutine:** Background loop in `runServe` checks hot messages every `tick_seconds` (default 60), moves messages older than `ttl_minutes` (default 60) to cooldown in batches (default 100). Embeddings and FTS5 entries are copied. USearch keys change from `"hot:"` to `"cool:"` prefix.
 
-**Annotation format (D33):** `[N] [Speaker] (date) (time) (->ref): content`. Linker (->ref) connects confirmations ("yes") to the specific proposal they confirm. Known facts NOT included in extraction prompt (paradoxical priming effect measured in E020).
+**Message linker (BVP-354):** `linker_ref` field connects messages to their reply targets. Set via `internal/ingest.ApplyHotLinkerRef` before insert. Heuristic: links to the latest prior hot row from the other speaker in the same `platform_session_id`. Used to connect confirmations ("yes") to the specific proposal they confirm.
 
-**Triggers (D34):** Topic silence (8 hours, configurable) + cluster size (50 messages, safety valve). Session end rejected -- technical event, not semantic.
+**Topic segmentation (D32, Phase 2):** Hybrid Union algorithm (TreeSeg + TT+Merge, boundary union). Determines WHEN to extract (cluster readiness) and WHICH messages form a block. Does NOT reorder messages -- extraction receives chronological order. Experiment showed topic-based reordering adds no extraction quality.
 
-**Query path:** Three-phase search. Hot (FTS5 + embed over raw messages, freshest data), Cool (annotated messages not yet extracted), Cold (structured facts, existing 5-layer pipeline). Results merged via RRF, LLM synthesis handles mixed formats.
+**Annotation format (D33, Phase 2):** `[N] [Speaker] (date) (time) (->ref): content`. Linker (->ref) connects confirmations to proposals. Known facts NOT included in extraction prompt (paradoxical priming effect measured in E020).
 
-**Platforms without hooks:** Transcript files go directly to cool phase via file watcher. No hot phase. Same extraction pipeline.
+**Triggers (D34, Phase 2):** Topic silence (8 hours, configurable) + cluster size (50 messages, safety valve). Session end rejected -- technical event, not semantic.
+
+**Query path (Phase 1):** Nine-layer search. Four new layers (hot vector, hot FTS5, cooldown vector, cooldown FTS5) added to existing five (fact vector, fact FTS5, chunk vector, chunk FTS5, graph). Hot and cooldown raw messages merged via RRF alongside structured facts. LLM synthesis includes "Fresh Messages" section for raw messages. Citations support `hot_message_id` field.
+
+**Platforms without hooks:** Transcript files go directly to cold phase via file watcher (batch path). No hot phase. Same extraction pipeline.
 
 ### 1.6 Embedding
 
-`internal/provider.EmbedderChain` generates vector embeddings for fact content.
+`internal/provider.EmbedderChain` generates vector embeddings for fact content, transcript chunks, and hot/cooldown messages.
 
 - Embedders are tried in priority order (same fallback pattern as LLM providers).
-- Each fact's embedding is stored in the `facts_vec` virtual table (sqlite-vec) alongside the fact ID.
+- Each fact's embedding is stored in the `facts.embedding` BLOB column (source of truth) and indexed in USearch HNSW (cache for fast search, key prefix `"fact:"+factID`).
 - The `embedding_model` column on the fact records which model produced the vector. This enables selective re-embedding when switching providers.
-- Embedder types: OpenAI-compatible (covers OpenAI, Google, etc.) and Ollama.
+- Embedder types: OpenAI-compatible (covers OpenAI, Google, Voyage AI, etc.) and Ollama.
+
+**USearch vector index (D36, BVP-365):** Single `.vecindex` sidecar file next to the SQLite database. All vector tables (facts, chunks, hot messages, cooldown messages) share one HNSW index. Keys are prefixed to avoid collisions: `fact:<ulid>`, `chunk:<ulid>`, `hot:<ulid>`, `cool:<ulid>`. The uint64 key in USearch is FNV-64 hash of the prefixed string key. SQLite embedding BLOB columns are the source of truth; the cache file is expendable and rebuildable. Load time: ~75ms for 200K vectors. Search time: ~1.1ms at 200K scale (247x faster than sqlite-vec brute-force).
 
 ---
 
@@ -141,27 +156,51 @@ Message arrives (from hook/API)
 
 ### 2.1 Retrieval Layers
 
-Five layers run concurrently:
+Nine layers run concurrently (when hot phase and embeddings are enabled):
 
 | Layer | Source | Method | Limit |
 |-------|--------|--------|-------|
-| Vector facts | `facts_vec` | KNN cosine search on question embedding | 20 |
-| Vector chunks | `chunks_vec` | KNN cosine search on question embedding | 10 |
+| Hot vector | USearch index (`"hot:"` prefix) | HNSW cosine search on question embedding | 10 |
+| Hot FTS5 | `hot_messages_fts` | BM25 keyword search on sanitized question | 10 |
+| Cooldown vector | USearch index (`"cool:"` prefix) | HNSW cosine search on question embedding | 10 |
+| Cooldown FTS5 | `cooldown_messages_fts` | BM25 keyword search on sanitized question | 10 |
+| Vector facts | USearch index (`"fact:"` prefix) | HNSW cosine search on question embedding | 20 |
+| Vector chunks | USearch index (`"chunk:"` prefix) | HNSW cosine search on question embedding | 10 |
 | FTS5 facts | `facts_fts` | BM25 keyword search on sanitized question | 10 |
 | FTS5 chunks | `transcript_chunks_fts` | BM25 keyword search on sanitized question | 10 |
 | Graph | `entities` + `relationships` | Word-match entity lookup, 1-hop traversal, collect source facts | unbounded |
 
-Vector layers are skipped when no embedder is configured (graceful degradation to FTS5 + graph).
+**Graceful degradation:**
+- Vector layers are skipped when no embedder is configured (falls back to FTS5 + graph)
+- Hot/cooldown layers return empty when hot phase is disabled or tables are empty (zero overhead)
+- When hot_messages and cooldown_messages are both empty, the pipeline behaves identically to the 5-layer cold-only version
 
 ### 2.2 Merge and Rank
 
-Results from all layers are deduplicated by fact ID and scored using Reciprocal Rank Fusion (k=60):
+Results from all layers are deduplicated and scored using Reciprocal Rank Fusion (k=60):
 
 ```
-score(fact) = sum over layers: 1 / (k + rank_in_layer)
+score(item) = sum over layers: 1 / (k + rank_in_layer)
 ```
 
-Facts that appear in multiple layers get higher scores.
+Items that appear in multiple layers get higher scores.
+
+**Unified type:** The `rankedItem` struct holds either a structured fact or a raw hot/cooldown message:
+
+```go
+type rankedItem struct {
+    fact       *model.Fact
+    hotMessage *model.HotMessage
+    score      float64
+    isHot      bool  // true for hot and cooldown messages
+}
+```
+
+**Hot/cooldown prefixes:** Hot and cooldown messages use prefixed keys (`"hot:"+messageID`, `"cool:"+messageID`) in the score map to distinguish them from fact IDs and from each other. Both participate in RRF merge alongside structured facts.
+
+**Set-union alternative:** `--merge-strategy=set-union` uses dense-first ordering: vector hits keep similarity order, then FTS5-only hits, then graph-only hits, then hot/cooldown hits. No RRF scoring. Programmatic: `query.WithMergeStrategy("set-union")`.
+
+**Optional post-merge rerank:** When `[[providers.reranker]]` is set (e.g. Cohere `name = "cohere"` with `api_key_env` and `model`), the querier uses **only the first** table entry; additional rows are ignored (startup warning). The querier may call an external rerank API on a prefix of the merged list. `[rerank]` `top_n` limits how many leading items are considered. Reranking applies only when that prefix consists entirely of structured facts (not hot/cooldown raw rows); it reorders within the prefix and leaves the tail unchanged. On API failure or an invalid response, merge order is kept.
 
 ### 2.3 ReadContext Enrichment
 
@@ -169,13 +208,17 @@ For the top 10 ranked facts that have source line references, the system loads s
 
 ### 2.4 LLM Synthesis
 
-The system builds a prompt with three sections:
+The system builds a prompt with four sections (when hot/cooldown results exist):
 
 1. **Question** -- the user's question.
-2. **Facts** -- ranked facts with ID, type, confidence, date, subject, content.
-3. **Transcript Context** -- raw lines from disk for facts that have source references.
+2. **Fresh Messages** (optional) -- raw hot/cooldown messages sorted newest-first. Format: `[hot:<id>] (<speaker>, <date> <time>): <content>`. If message has `linker_ref`, shown as `(->ref)` after time. This section appears only when hot or cooldown layers returned results.
+3. **Facts** -- ranked structured facts with ID, type, confidence, date, subject, content.
+4. **Data Quality** -- computed metrics from the fact set (average confidence, superseded count, age spread, source diversity).
+5. **Transcript Context** -- raw lines from disk for facts that have source references, plus chunk contexts from top chunk hits.
 
-The LLM returns JSON with an answer, citations (fact IDs and/or consolidation IDs), a confidence score, and optional notes about contradictions or gaps. The `rawQueryResponse` struct parses all four fields, but `parseResponse` only passes `answer` and `citations` into `QueryResult` -- the `confidence` and `notes` fields are parsed and discarded.
+The LLM returns JSON with an answer, citations (fact IDs, consolidation IDs, and/or hot_message_ids), a confidence score, and optional notes about contradictions or gaps. The `rawQueryResponse` struct parses all four fields, but `parseResponse` only passes `answer` and `citations` into `QueryResult` -- the `confidence` and `notes` fields are parsed and discarded.
+
+**Citation extension:** The `Citation` struct now includes `HotMessageID` field for citing raw messages: `{"hot_message_id": "hot:01JQ..."}`. The LLM uses this to reference fresh messages that contributed to the answer.
 
 ---
 
@@ -411,20 +454,28 @@ ALTER TABLE query_log ADD COLUMN cooldown_by_text INTEGER NOT NULL DEFAULT 0;
 
 Two separate tables for performance: hot = realtime query (agent waits), cool = background processing. Message ID (ULID) generated once in hot, preserved in cooldown. Vector search for hot and cooldown uses the shared USearch cache (`*.vecindex`) with prefixed keys (`hot:`, `cool:`), not sqlite-vec vec0 tables.
 
-### 5.2 Vector Tables
+Hot ingest linker (BVP-354): before insert, `internal/ingest.ApplyHotLinkerRef` can set `linker_ref` to the latest prior hot row from the other speaker (`user` / `assistant`) in the same `platform_session_id`. `Store` exposes `GetRecentHotMessages` and `GetLinkedMessages` for that heuristic and for walking `linker_ref` across hot and cooldown rows.
 
-sqlite-vec virtual tables are created programmatically (not in SQL migrations) because dimensions come from config at runtime.
+### 5.2 Vector Index (USearch HNSW, D36)
 
-```sql
-CREATE VIRTUAL TABLE facts_vec USING vec0(
-    fact_id TEXT PRIMARY KEY,
-    embedding float[<dims>] distance_metric=cosine
-);
-```
+Vector search uses USearch (C library + Go bindings) instead of sqlite-vec. Single `.vecindex` sidecar file next to the SQLite database.
 
-`EnsureVecTable(dims)` checks if the table exists with the correct dimensions. If dimensions changed, it drops and recreates the table.
+**Architecture:**
+- **Source of truth:** Embedding BLOB columns on tables (`facts.embedding`, `transcript_chunks.embedding`, `hot_messages.embedding`, `cooldown_messages.embedding`)
+- **Cache for fast search:** USearch HNSW index in `<dbname>.vecindex` file
+- **Key mapping:** String keys (`fact:<ulid>`, `chunk:<ulid>`, `hot:<ulid>`, `cool:<ulid>`) mapped to uint64 via FNV-64 hash
+- **Quantization:** f16 (half-precision). Recall@1 = 99.1% vs 99.2% for f32. Memory: ~341 MB for 200K/768d vs ~585 MB for f32.
+- **Thread safety:** Concurrent reads and writes are safe (`ChangeThreadsSearch(16)`, `ChangeThreadsAdd(4)` at startup)
 
-A separate `chunks_vec` table stores transcript chunk embeddings with the same structure.
+**Lifecycle:**
+1. **Startup:** Try `index.Load(cachePath)`. If success: ~75ms for 200K vectors. Done.
+2. **Cache miss/corrupt:** Rebuild from SQLite embedding BLOBs. Slow (~11 min for 200K) but only on first run or recovery.
+3. **Runtime:** `index.Add()` on each new embedding, `index.Search()` for queries.
+4. **Shutdown:** `index.Save()` via atomic write (temp file + `os.Rename`). ~316ms for 200K.
+
+**Performance:** ~1.1ms search at 200K scale, 247x faster than sqlite-vec brute-force (~272ms estimated).
+
+**Legacy sqlite-vec:** The `facts_vec` and `chunks_vec` virtual tables remain in the module graph for migration and optional backfill from older deployments. New code uses USearch exclusively.
 
 ### 5.3 FTS5
 
@@ -483,6 +534,7 @@ Each task type has its own provider chain configured independently:
 | Consolidation | `[[providers.consolidation]]` | `Consolidator` |
 | Query | `[[providers.query]]` | `Querier` |
 | Embedding | `[[providers.embedding]]` | `EmbedderChain` |
+| Reranker | `[[providers.reranker]]` | Optional `Querier` post-merge rerank (e.g. Cohere `/v2/rerank`) |
 
 If no query providers are configured, the extraction chain is used as fallback.
 
@@ -617,12 +669,14 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 | `[embedding]` | Dimensions, distance metric |
 | `[watcher]` | Watch path, poll interval, debounce, consolidate-after-ingest flag |
 | `[prompts]` | Paths to extraction, consolidation, and query prompt templates |
-| `[[providers.*]]` | Provider chains for extraction, consolidation, query, embedding |
+| `[[providers.*]]` | Provider chains for extraction, consolidation, query, embedding, reranker |
 | `[[types.*]]` | Type taxonomy: fact_types, entity_types, relation_types, connection_types |
 | `[context]` | Context builder settings: recent_hours, max_facts, include_preferences |
 | `[quality]` | Quality signal collection + Karpathy loop: enabled, thresholds, prompt paths, golden_dir |
 | `[health]` | Provider auto-healing: catalog_refresh_days, max_retries, retry_interval_hours, queue_ttl_hours |
 | `[openclaw]` | OpenClaw memory backend mode (off/parallel/replace) |
+| `[hot]` | Hot phase (v0.5.0): enabled, ttl_minutes, tick_seconds, batch_size, embed_min_chars |
+| `[rerank]` | Optional post-merge reranking: top_n |
 
 ### 7.2 Defaults
 
@@ -746,4 +800,4 @@ Rate-limited to 1 attempt per hour. Three consecutive failures pause for 24 hour
 
 ### 11.3 Query Log
 
-`query_log` table records per-query metrics: total/retrieval/synthesis latency, facts found per layer (vector, text, graph), citations count, embedder availability. Aggregated in `GET /status` and `imprint status`.
+`query_log` table records per-query metrics: total/retrieval/synthesis latency, facts found per layer (vector, text, graph, hot, cooldown), citations count, embedder availability. Four new columns added in migration 014: `hot_by_vector`, `hot_by_text`, `cooldown_by_vector`, `cooldown_by_text`. Aggregated in `GET /status` and `imprint status`.
