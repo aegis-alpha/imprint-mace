@@ -452,13 +452,10 @@ func (h *Handler) handleAdminReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sqlStore, ok := h.store.(interface {
-		EnsureVecTable(ctx context.Context, dims int) error
-		EnsureChunkVecTable(ctx context.Context, dims int) error
-	}); ok {
-		ctx := r.Context()
-		_ = sqlStore.EnsureVecTable(ctx, 0)      //nolint:errcheck // best-effort after reset; dims unknown
-		_ = sqlStore.EnsureChunkVecTable(ctx, 0) //nolint:errcheck // best-effort after reset; dims unknown
+	if sqlStore, ok := h.store.(*db.SQLiteStore); ok {
+		if err := sqlStore.ReloadVectorIndex(r.Context()); err != nil {
+			h.logger.Warn("vector index reload after reset failed", "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reset complete"})

@@ -79,7 +79,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  eval --golden=PATH [--format=json|table] [--save-baseline] [--check] [--threshold=N]")
 		fmt.Fprintln(os.Stderr, "                                          Evaluate extraction quality against golden set")
 		fmt.Fprintln(os.Stderr, "  eval generate [--output=PATH]           Generate built-in golden eval dataset (default: testdata/golden/)")
-		fmt.Fprintln(os.Stderr, "  eval-retrieval [--format=json|table] [--no-embedder] [--save-baseline] [--check] [--threshold=N]")
+		fmt.Fprintln(os.Stderr, "  eval-retrieval [--format=json|table] [--no-embedder] [--merge-strategy=rrf|set-union] [--save-baseline] [--check] [--threshold=N]")
 		fmt.Fprintln(os.Stderr, "                                          Evaluate retrieval quality (Recall@10, MRR)")
 		fmt.Fprintln(os.Stderr, "  eval-history [--type=extraction|retrieval] [--limit=N] Show eval score history")
 		fmt.Fprintln(os.Stderr, "  optimize                  Run one prompt optimization cycle (Karpathy loop)")
@@ -209,6 +209,7 @@ func main() {
 	case "eval-retrieval":
 		format := "table"
 		noEmbedder := false
+		mergeStrategy := "rrf"
 		saveBaseline, check := false, false
 		threshold := 0.05
 		for _, a := range args[1:] {
@@ -217,6 +218,8 @@ func main() {
 				format = a[9:]
 			case a == "--no-embedder":
 				noEmbedder = true
+			case strings.HasPrefix(a, "--merge-strategy="):
+				mergeStrategy = strings.TrimSpace(strings.ToLower(a[17:]))
 			case a == "--save-baseline":
 				saveBaseline = true
 			case a == "--check":
@@ -225,7 +228,7 @@ func main() {
 				fmt.Sscanf(a[12:], "%f", &threshold) //nolint:gosec
 			}
 		}
-		runEvalRetrieval(logger, *cfgPath, format, noEmbedder, saveBaseline, check, threshold)
+		runEvalRetrieval(logger, *cfgPath, format, noEmbedder, mergeStrategy, saveBaseline, check, threshold)
 	case "eval-history":
 		evalType := ""
 		limit := 10
@@ -266,12 +269,8 @@ func openStore(logger *slog.Logger, cfg *config.Config) *db.SQLiteStore {
 		os.Exit(1)
 	}
 	dims := cfg.EffectiveEmbeddingDims()
-	if err := store.EnsureVecTable(context.Background(), dims); err != nil {
-		logger.Error("failed to initialize vector table", "error", err)
-		os.Exit(1)
-	}
-	if err := store.EnsureChunkVecTable(context.Background(), dims); err != nil {
-		logger.Error("failed to initialize chunk vector table", "error", err)
+	if err := store.AttachVectorIndex(dims); err != nil {
+		logger.Error("failed to open vector index", "error", err)
 		os.Exit(1)
 	}
 	return store
@@ -1351,7 +1350,7 @@ func runEval(logger *slog.Logger, cfgPath, goldenDir, format string, saveBaselin
 	}
 }
 
-func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, saveBaseline, check bool, threshold float64) {
+func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bool, mergeStrategy string, saveBaseline, check bool, threshold float64) {
 	cfg, _ := config.Load(cfgPath)
 
 	tmpDir, err := os.MkdirTemp("", "imprint-eval-retrieval-*")
@@ -1369,6 +1368,15 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, s
 	}
 	defer tmpStore.Close()
 
+	dims := 1536
+	if cfg != nil {
+		dims = cfg.EffectiveEmbeddingDims()
+	}
+	if err := tmpStore.AttachVectorIndex(dims); err != nil {
+		logger.Error("failed to attach vector index for eval DB", "error", err)
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
 
 	seed := impeval.BuiltinRetrievalSeed()
@@ -1384,12 +1392,6 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, s
 		embChain, embErr := provider.NewEmbedderChain(cfg.Providers.Embedding)
 		if embErr == nil && embChain != nil {
 			embedder = embChain
-
-			dims := cfg.EffectiveEmbeddingDims()
-			if err := tmpStore.EnsureVecTable(ctx, dims); err != nil {
-				logger.Error("failed to initialize vector table", "error", err)
-				os.Exit(1)
-			}
 
 			fmt.Fprintf(os.Stderr, "Embedding %d seed facts...\n", nf)
 			for i := range seed.Facts {
@@ -1422,10 +1424,14 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder, s
 		}
 	}
 
-	q := query.New(tmpStore, embedder, sender, "", logger)
+	var qOpts []query.QuerierOption
+	if mergeStrategy != "" && mergeStrategy != "rrf" {
+		qOpts = append(qOpts, query.WithMergeStrategy(mergeStrategy))
+	}
+	q := query.New(tmpStore, embedder, sender, "", logger, qOpts...)
 
 	examples := impeval.BuiltinRetrievalExamples()
-	fmt.Fprintf(os.Stderr, "Running retrieval eval: %d questions\n", len(examples))
+	fmt.Fprintf(os.Stderr, "Running retrieval eval: %d questions (merge=%s)\n", len(examples), mergeStrategy)
 
 	report, err := impeval.RunRetrieval(ctx, q, examples)
 	if err != nil {

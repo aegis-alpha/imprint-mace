@@ -194,8 +194,8 @@ func testEngineWithDedup(t *testing.T, sender *mockSender, embedder provider.Emb
 	t.Cleanup(func() { store.Close() })
 
 	if dims > 0 {
-		if err := store.EnsureVecTable(context.Background(), dims); err != nil {
-			t.Fatalf("ensure vec table: %v", err)
+		if err := store.AttachVectorIndex(dims); err != nil {
+			t.Fatalf("AttachVectorIndex: %v", err)
 		}
 	}
 

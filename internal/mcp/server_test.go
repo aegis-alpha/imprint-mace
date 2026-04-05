@@ -46,8 +46,8 @@ func testServer(t *testing.T, sender *mockSender) *Server {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 8); err != nil {
-		t.Fatalf("vec table: %v", err)
+	if err := store.AttachVectorIndex(8); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -71,8 +71,8 @@ func testStore(t *testing.T) (*Server, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 8); err != nil {
-		t.Fatalf("vec table: %v", err)
+	if err := store.AttachVectorIndex(8); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -443,11 +443,8 @@ func TestQueryTool_ReturnsAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("vec table: %v", err)
-	}
-	if err := store.EnsureChunkVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("chunk vec table: %v", err)
+	if err := store.AttachVectorIndex(4); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -595,8 +592,8 @@ func testStoreWithBuilder(t *testing.T) (*Server, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 8); err != nil {
-		t.Fatalf("vec table: %v", err)
+	if err := store.AttachVectorIndex(8); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 

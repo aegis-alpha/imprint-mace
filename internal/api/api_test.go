@@ -32,11 +32,8 @@ func testAPI(t *testing.T) (*Handler, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("vec table: %v", err)
-	}
-	if err := store.EnsureChunkVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("chunk vec table: %v", err)
+	if err := store.AttachVectorIndex(4); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 
@@ -55,11 +52,8 @@ func testAPIWithBuilder(t *testing.T) (*Handler, db.Store) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("vec table: %v", err)
-	}
-	if err := store.EnsureChunkVecTable(context.Background(), 4); err != nil {
-		t.Fatalf("chunk vec table: %v", err)
+	if err := store.AttachVectorIndex(4); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
 

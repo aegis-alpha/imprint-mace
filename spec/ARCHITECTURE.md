@@ -385,22 +385,31 @@ ALTER TABLE eval_runs ADD COLUMN git_commit TEXT;
 ALTER TABLE eval_runs ADD COLUMN is_baseline INTEGER NOT NULL DEFAULT 0;
 ```
 
-**Hot-Cool Pipeline tables (migration 013, D35) -- not yet implemented:**
+**Transcript chunk embedding BLOB (migration 013, BVP-365):**
+
+```sql
+ALTER TABLE transcript_chunks ADD COLUMN embedding BLOB;
+```
+
+Source of truth for chunk vectors for USearch rebuild; `chunks_vec` remains until a later migration removes it.
+
+**Hot-Cool Pipeline (migration 014, BVP-352, D35, D36):**
 
 ```sql
 hot_messages (id, speaker, content, timestamp, platform, platform_session_id,
-              linker_ref, has_embedding, created_at)
-    -- FTS5 virtual table over content
-    -- vec0 table created programmatically (D23 pattern)
-
+              linker_ref, has_embedding, created_at, embedding BLOB)
 cooldown_messages (id, speaker, content, timestamp, platform, platform_session_id,
                    linker_ref, has_embedding, cluster_id, transcript_file,
-                   transcript_line, processed_at, moved_from_hot, created_at)
-    -- FTS5 virtual table over content
-    -- vec0 table created programmatically
+                   transcript_line, processed_at, moved_from_hot, created_at, embedding BLOB)
+CREATE VIRTUAL TABLE hot_messages_fts USING fts5(content, message_id UNINDEXED);
+CREATE VIRTUAL TABLE cooldown_messages_fts USING fts5(content, message_id UNINDEXED);
+ALTER TABLE query_log ADD COLUMN hot_by_vector INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE query_log ADD COLUMN hot_by_text INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE query_log ADD COLUMN cooldown_by_vector INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE query_log ADD COLUMN cooldown_by_text INTEGER NOT NULL DEFAULT 0;
 ```
 
-Two separate tables for performance: hot = realtime query (agent waits), cool = background processing. Message ID (ULID) generated once in hot, preserved in cooldown. Selective embedding: has_embedding=1 only for messages >= 50 chars.
+Two separate tables for performance: hot = realtime query (agent waits), cool = background processing. Message ID (ULID) generated once in hot, preserved in cooldown. Vector search for hot and cooldown uses the shared USearch cache (`*.vecindex`) with prefixed keys (`hot:`, `cool:`), not sqlite-vec vec0 tables.
 
 ### 5.2 Vector Tables
 
@@ -703,7 +712,9 @@ Table (default) or JSON (`--format=json`). The composite score is a single numbe
 
 **Graceful degradation:** Run with `--no-embedder` to measure quality without vector search. The delta between full and text+graph-only modes quantifies embedder importance.
 
-The `Querier.Retrieve()` method runs the full retrieval pipeline (embed, parallel search, RRF merge) and returns ranked facts with per-fact layer provenance (`FromVector`, `FromText`, `FromGraph`) without calling the LLM for synthesis.
+**Merge strategy (experiments):** `--merge-strategy=rrf` (default) uses reciprocal rank fusion. `--merge-strategy=set-union` uses dense-first ordering: vector hits keep similarity order, then FTS5 hits not already listed, then graph hits not already listed. Programmatic equivalent: `query.WithMergeStrategy`. Findings: `research/RETRIEVAL-OPTIMIZATION-RESEARCH.md` (E023).
+
+The `Querier.Retrieve()` method runs the full retrieval pipeline (embed, parallel search, merge step defaulting to RRF) and returns ranked facts with per-fact layer provenance (`FromVector`, `FromText`, `FromGraph`) without calling the LLM for synthesis.
 
 ---
 

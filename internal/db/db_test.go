@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -765,47 +766,75 @@ func TestFindPath_NoPath(t *testing.T) {
 	}
 }
 
-// --- Vec table ---
+// --- Migration 013 (chunk embedding BLOB) ---
 
-func TestEnsureVecTable_Creates(t *testing.T) {
+func TestMigration013_AddsEmbeddingColumn(t *testing.T) {
 	store := openTestDB(t)
-	if err := store.EnsureVecTable(context.Background(), 1536); err != nil {
-		t.Fatalf("EnsureVecTable: %v", err)
-	}
-	var name string
-	err := store.RawDB().QueryRow(
-		"SELECT name FROM sqlite_master WHERE type='table' AND name='facts_vec'").Scan(&name)
+	var n int
+	err := store.RawDB().QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('transcript_chunks') WHERE name = 'embedding'`).Scan(&n)
 	if err != nil {
-		t.Fatalf("facts_vec not found: %v", err)
+		t.Fatalf("pragma_table_info: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected transcript_chunks.embedding column, found count=%d", n)
 	}
 }
 
-func TestEnsureVecTable_Idempotent(t *testing.T) {
+func TestBackfillChunkEmbeddings(t *testing.T) {
 	store := openTestDB(t)
-	if err := store.EnsureVecTable(context.Background(), 768); err != nil {
-		t.Fatalf("first call: %v", err)
+	ctx := context.Background()
+	dims := 3
+	_, err := store.RawDB().ExecContext(ctx, fmt.Sprintf(
+		`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[%d] distance_metric=cosine)`,
+		dims))
+	if err != nil {
+		t.Fatalf("create chunks_vec: %v", err)
 	}
-	if err := store.EnsureVecTable(context.Background(), 768); err != nil {
-		t.Fatalf("second call: %v", err)
+	tr := &model.Transcript{
+		ID: NewID(), FilePath: "bf.md", ChunkCount: 1,
+		CreatedAt: time.Now().UTC().Truncate(time.Second),
+	}
+	if err := store.CreateTranscript(ctx, tr); err != nil {
+		t.Fatal(err)
+	}
+	c := &model.TranscriptChunk{
+		ID: NewID(), TranscriptID: tr.ID, LineStart: 1, LineEnd: 5, ContentHash: "h",
+	}
+	if err := store.CreateTranscriptChunk(ctx, c, "body"); err != nil {
+		t.Fatal(err)
+	}
+	emb := []float32{0.25, 0.5, 0.75}
+	blob := float32ToBlob(emb)
+	if _, err := store.RawDB().ExecContext(ctx,
+		`INSERT INTO chunks_vec(chunk_id, embedding) VALUES (?, ?)`, c.ID, blob); err != nil {
+		t.Fatalf("insert chunks_vec: %v", err)
+	}
+	if err := store.backfillChunkEmbeddingsIfNeeded(); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+	var got []byte
+	if err := store.RawDB().QueryRowContext(ctx,
+		`SELECT embedding FROM transcript_chunks WHERE id = ?`, c.ID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 {
+		t.Fatal("expected transcript_chunks.embedding backfilled")
+	}
+	if len(got) != len(blob) {
+		t.Fatalf("blob len: want %d, got %d", len(blob), len(got))
 	}
 }
 
-func TestEnsureVecTable_RecreatesOnDimChange(t *testing.T) {
+func TestSearchByVector_NilVectorIndex(t *testing.T) {
 	store := openTestDB(t)
-	if err := store.EnsureVecTable(context.Background(), 768); err != nil {
-		t.Fatalf("create with 768: %v", err)
-	}
-	if err := store.EnsureVecTable(context.Background(), 1536); err != nil {
-		t.Fatalf("recreate with 1536: %v", err)
-	}
-	var createSQL string
-	err := store.RawDB().QueryRow(
-		"SELECT sql FROM sqlite_master WHERE type='table' AND name='facts_vec'").Scan(&createSQL)
+	ctx := context.Background()
+	res, err := store.SearchByVector(ctx, []float32{1, 0, 0, 0}, 5)
 	if err != nil {
-		t.Fatalf("facts_vec not found after recreate: %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(createSQL, "float[1536]") {
-		t.Errorf("expected float[1536] in SQL, got %q", createSQL)
+	if res != nil && len(res) != 0 {
+		t.Fatalf("expected empty without vector index, got %d hits", len(res))
 	}
 }
 
@@ -814,8 +843,8 @@ func TestEnsureVecTable_RecreatesOnDimChange(t *testing.T) {
 func vecTestStore(t *testing.T, dims int) *SQLiteStore {
 	t.Helper()
 	store := openTestDB(t)
-	if err := store.EnsureVecTable(context.Background(), dims); err != nil {
-		t.Fatalf("EnsureVecTable: %v", err)
+	if err := store.AttachVectorIndex(dims); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
 	return store
 }
@@ -1315,11 +1344,10 @@ func TestSearchChunksByText_BM25Ranking(t *testing.T) {
 
 func TestListChunksWithoutEmbedding(t *testing.T) {
 	store := openTestDB(t)
-	ctx := context.Background()
-
-	if err := store.EnsureChunkVecTable(context.Background(), 3); err != nil {
-		t.Fatalf("EnsureChunkVecTable: %v", err)
+	if err := store.AttachVectorIndex(3); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
+	ctx := context.Background()
 
 	tr := &model.Transcript{
 		ID: NewID(), FilePath: "emb-list.md", ChunkCount: 3,
@@ -1347,11 +1375,10 @@ func TestListChunksWithoutEmbedding(t *testing.T) {
 
 func TestListChunksByEmbeddingModel(t *testing.T) {
 	store := openTestDB(t)
-	ctx := context.Background()
-
-	if err := store.EnsureChunkVecTable(context.Background(), 3); err != nil {
-		t.Fatalf("EnsureChunkVecTable: %v", err)
+	if err := store.AttachVectorIndex(3); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
+	ctx := context.Background()
 
 	tr := &model.Transcript{
 		ID: NewID(), FilePath: "emb-model.md", ChunkCount: 3,
@@ -1658,11 +1685,10 @@ func TestCreateAndListTranscriptChunks(t *testing.T) {
 
 func TestUpdateChunkEmbeddingAndSearch(t *testing.T) {
 	store := openTestDB(t)
-	ctx := context.Background()
-
-	if err := store.EnsureChunkVecTable(context.Background(), 3); err != nil {
-		t.Fatalf("EnsureChunkVecTable: %v", err)
+	if err := store.AttachVectorIndex(3); err != nil {
+		t.Fatalf("AttachVectorIndex: %v", err)
 	}
+	ctx := context.Background()
 
 	tr := &model.Transcript{
 		ID: NewID(), FilePath: "vec-test.md", ChunkCount: 1,

@@ -50,11 +50,8 @@ func testQuerier(t *testing.T, sender *mockSender, embedder provider.Embedder) (
 		me := embedder.(*mockEmbedder)
 		dims := len(me.vec)
 		if dims > 0 {
-			if err := store.EnsureVecTable(context.Background(), dims); err != nil {
-				t.Fatalf("ensure vec table: %v", err)
-			}
-			if err := store.EnsureChunkVecTable(context.Background(), dims); err != nil {
-				t.Fatalf("ensure chunk vec table: %v", err)
+			if err := store.AttachVectorIndex(dims); err != nil {
+				t.Fatalf("AttachVectorIndex: %v", err)
 			}
 		}
 	}
@@ -429,6 +426,111 @@ func TestMergeResults_RRFRanking(t *testing.T) {
 	}
 	if ranked[0].score <= ranked[1].score {
 		t.Error("expected first fact to have higher RRF score than second")
+	}
+}
+
+func TestMergeSetUnion_PreservesDenseOrder(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "su-1", Content: "first"}},
+			{Fact: model.Fact{ID: "su-2", Content: "second"}},
+			{Fact: model.Fact{ID: "su-3", Content: "third"}},
+		},
+		factsByText: []db.ScoredFact{
+			{Fact: model.Fact{ID: "su-3", Content: "third"}},
+			{Fact: model.Fact{ID: "su-1", Content: "first"}},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) < 3 {
+		t.Fatalf("expected 3 facts, got %d", len(ranked))
+	}
+	if ranked[0].fact.ID != "su-1" || ranked[1].fact.ID != "su-2" || ranked[2].fact.ID != "su-3" {
+		t.Errorf("expected dense order su-1, su-2, su-3, got %q, %q, %q",
+			ranked[0].fact.ID, ranked[1].fact.ID, ranked[2].fact.ID)
+	}
+}
+
+func TestMergeSetUnion_AppendsSparseOnly(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "v-only", Content: "vector"}},
+		},
+		factsByText: []db.ScoredFact{
+			{Fact: model.Fact{ID: "t-1", Content: "text1"}},
+			{Fact: model.Fact{ID: "t-2", Content: "text2"}},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) != 3 {
+		t.Fatalf("expected 3 facts, got %d", len(ranked))
+	}
+	if ranked[0].fact.ID != "v-only" {
+		t.Errorf("expected vector fact first, got %q", ranked[0].fact.ID)
+	}
+	if ranked[1].fact.ID != "t-1" || ranked[2].fact.ID != "t-2" {
+		t.Errorf("expected text facts in FTS order after vector, got %q then %q", ranked[1].fact.ID, ranked[2].fact.ID)
+	}
+}
+
+func TestMergeSetUnion_DeduplicatesByFactID(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "a", Content: "A"}},
+			{Fact: model.Fact{ID: "b", Content: "B"}},
+		},
+		factsByText: []db.ScoredFact{
+			{Fact: model.Fact{ID: "b", Content: "B"}},
+			{Fact: model.Fact{ID: "c", Content: "C"}},
+		},
+		graphFacts: []model.Fact{
+			{ID: "a", Content: "A"},
+			{ID: "d", Content: "D"},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) != 4 {
+		t.Fatalf("expected 4 unique facts a,b,c,d order, got %d", len(ranked))
+	}
+	want := []string{"a", "b", "c", "d"}
+	for i := range want {
+		if ranked[i].fact.ID != want[i] {
+			t.Errorf("position %d: want %q, got %q", i, want[i], ranked[i].fact.ID)
+		}
+	}
+}
+
+func TestMergeSetUnion_FiltersExpiredFacts(t *testing.T) {
+	q := New(nil, nil, nil, "", slog.Default())
+
+	past := time.Now().UTC().Add(-24 * time.Hour)
+	future := time.Now().UTC().Add(24 * time.Hour)
+
+	r := &retrievalResult{
+		factsByVector: []db.ScoredFact{
+			{Fact: model.Fact{ID: "exp-001", Content: "expired", Validity: model.TimeRange{ValidUntil: &past}}, Score: 0.9},
+			{Fact: model.Fact{ID: "exp-002", Content: "active", Validity: model.TimeRange{ValidUntil: &future}}, Score: 0.8},
+			{Fact: model.Fact{ID: "exp-003", Content: "no expiry"}, Score: 0.7},
+		},
+	}
+
+	ranked := q.mergeSetUnion(r)
+	if len(ranked) != 2 {
+		t.Fatalf("expected 2 facts (expired filtered out), got %d", len(ranked))
+	}
+	for _, rf := range ranked {
+		if rf.fact.ID == "exp-001" {
+			t.Error("expired fact should have been filtered out")
+		}
 	}
 }
 

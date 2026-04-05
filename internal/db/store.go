@@ -97,10 +97,6 @@ type Store interface {
 	SearchChunksByText(ctx context.Context, query string, limit int) ([]ScoredChunk, error)
 	ListChunksWithoutEmbedding(ctx context.Context) ([]model.TranscriptChunk, error)
 	ListChunksByEmbeddingModel(ctx context.Context, modelName string) ([]model.TranscriptChunk, error)
-	EnsureChunkVecTable(ctx context.Context, dims int) error
-
-	// Vec tables
-	EnsureVecTable(ctx context.Context, dims int) error
 
 	// Embeddings
 	ListFactEmbeddings(ctx context.Context, factType string) ([][]float32, error)
@@ -146,16 +142,29 @@ type Store interface {
 	// Stats
 	Stats(ctx context.Context) (*DBStats, error)
 
+	// Hot / cooldown pipeline (BVP-352, HOT-PHASE-SPEC)
+	InsertHotMessage(ctx context.Context, msg *model.HotMessage, embedding []float32) error
+	ListHotMessages(ctx context.Context, filter HotMessageFilter) ([]model.HotMessage, error)
+	SearchHotByText(ctx context.Context, query string, limit int) ([]ScoredHotMessage, error)
+	SearchHotByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredHotMessage, error)
+	SearchCooldownByText(ctx context.Context, query string, limit int) ([]ScoredHotMessage, error)
+	SearchCooldownByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredHotMessage, error)
+	MoveHotToCooldown(ctx context.Context, olderThan time.Time, batchSize int) (moved int64, err error)
+	DeleteExpiredHot(ctx context.Context, olderThan time.Time) (int64, error)
+	CountHotMessages(ctx context.Context) (int, error)
+
 	// Lifecycle
 	Close() error
 }
 
 type DBStats struct {
-	Facts          int
-	Entities       int
-	Relationships  int
-	Consolidations int
-	IngestedFiles  int
+	Facts            int
+	Entities         int
+	Relationships    int
+	Consolidations   int
+	IngestedFiles    int
+	HotMessages      int
+	CooldownMessages int
 }
 
 type ScoredFact struct {
@@ -166,6 +175,18 @@ type ScoredFact struct {
 type ScoredChunk struct {
 	Chunk model.TranscriptChunk
 	Score float64
+}
+
+type HotMessageFilter struct {
+	PlatformSessionID string
+	After             *time.Time
+	Before            *time.Time
+	Limit             int
+}
+
+type ScoredHotMessage struct {
+	Message model.HotMessage
+	Score   float64
 }
 
 type EntityGraph struct {
@@ -271,12 +292,12 @@ type QueryLog struct {
 }
 
 type QueryLogStatsResult struct {
-	TotalQueries     int
+	TotalQueries      int
 	TotalContext      int
-	AvgQueryLatency  float64
+	AvgQueryLatency   float64
 	AvgContextLatency float64
-	ErrorCount       int
-	EmbedderAvailPct float64
+	ErrorCount        int
+	EmbedderAvailPct  float64
 }
 
 type EvalRun struct {

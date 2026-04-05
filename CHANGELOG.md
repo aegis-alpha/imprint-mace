@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+
+- Vector search and incremental vector updates use USearch (C library + Go bindings) with a `.vecindex` sidecar file; fact and chunk embeddings are stored as BLOB columns. Legacy sqlite-vec remains in the module graph for migration and optional backfill from older `*_vec` tables (BVP-365).
+
+### Added
+
+- Retrieval merge experiments: optional `set-union` ordering (dense list, then FTS5-only, then graph-only) vs default RRF; `imprint eval-retrieval --merge-strategy`, `query.WithMergeStrategy` (E023).
+- Migration `013_transcript_chunks_embedding.sql`: `transcript_chunks.embedding` BLOB column.
+- Package `internal/vecindex`: load/save index, filtered search by key prefix, rebuild from stored embeddings.
+
 ## [0.4.0] - 2026-03-20
 
 ### Added

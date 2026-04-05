@@ -34,17 +34,45 @@ type Querier struct {
 	sender        Sender
 	transcriptDir string
 	logger        *slog.Logger
+	// mergeStrategy: "" or "rrf" = Reciprocal Rank Fusion; "set-union" = dense order, then unseen sparse, then unseen graph.
+	mergeStrategy string
+}
+
+// QuerierOption configures a Querier created with New.
+type QuerierOption func(*Querier)
+
+// WithMergeStrategy selects how fact lists are merged after retrieval.
+// Use "rrf" (default) for reciprocal rank fusion, or "set-union" for dense-first
+// positional ordering (see mergeSetUnion).
+func WithMergeStrategy(s string) QuerierOption {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return func(q *Querier) {
+		q.mergeStrategy = s
+	}
 }
 
 // New creates a Querier. Pass nil for embedder to disable vector search
 // (falls back to FTS5 only).
-func New(store db.Store, embedder provider.Embedder, sender Sender, transcriptDir string, logger *slog.Logger) *Querier {
-	return &Querier{
+func New(store db.Store, embedder provider.Embedder, sender Sender, transcriptDir string, logger *slog.Logger, opts ...QuerierOption) *Querier {
+	q := &Querier{
 		store:         store,
 		embedder:      embedder,
 		sender:        sender,
 		transcriptDir: transcriptDir,
 		logger:        logger,
+	}
+	for _, o := range opts {
+		o(q)
+	}
+	return q
+}
+
+func (q *Querier) mergeRanked(r *retrievalResult) []rankedFact {
+	switch q.mergeStrategy {
+	case "set-union", "set_union":
+		return q.mergeSetUnion(r)
+	default:
+		return q.mergeAndRank(r)
 	}
 }
 
@@ -91,7 +119,7 @@ func (q *Querier) Retrieve(ctx context.Context, question string) (*RetrievalResu
 	}
 
 	r := q.retrieve(ctx, question, embedding)
-	ranked := q.mergeAndRank(r)
+	ranked := q.mergeRanked(r)
 
 	vectorIDs := map[string]bool{}
 	for i := range r.factsByVector {
@@ -145,7 +173,7 @@ func (q *Querier) Query(ctx context.Context, question string) (*model.QueryResul
 	retrieved := q.retrieve(ctx, question, embedding)
 	retrievalMs := time.Since(retrievalStart).Milliseconds()
 
-	ranked := q.mergeAndRank(retrieved)
+	ranked := q.mergeRanked(retrieved)
 
 	enriched := q.enrichWithContext(ctx, ranked, retrieved)
 
@@ -500,6 +528,42 @@ func (q *Querier) mergeAndRank(r *retrievalResult) []rankedFact {
 
 	sortByScore(ranked)
 	return ranked
+}
+
+// mergeSetUnion orders facts like Omni-SimpleMem-style fusion: keep vector hits
+// in similarity order, append FTS5-only hits, then graph-only hits, with no RRF
+// score. Expired facts are dropped (same rule as mergeAndRank). Positional
+// scores decrease by 0.01 per rank for downstream compatibility with rankedFact.score.
+func (q *Querier) mergeSetUnion(r *retrievalResult) []rankedFact {
+	now := time.Now().UTC()
+	seen := make(map[string]struct{}, len(r.factsByVector)+len(r.factsByText)+len(r.graphFacts))
+	var out []rankedFact
+
+	tryAdd := func(f model.Fact) {
+		if f.Validity.ValidUntil != nil && f.Validity.ValidUntil.Before(now) {
+			return
+		}
+		if _, ok := seen[f.ID]; ok {
+			return
+		}
+		seen[f.ID] = struct{}{}
+		pos := len(out)
+		out = append(out, rankedFact{
+			fact:  f,
+			score: 1.0 - float64(pos)*0.01,
+		})
+	}
+
+	for i := range r.factsByVector {
+		tryAdd(r.factsByVector[i].Fact)
+	}
+	for i := range r.factsByText {
+		tryAdd(r.factsByText[i].Fact)
+	}
+	for i := range r.graphFacts {
+		tryAdd(r.graphFacts[i])
+	}
+	return out
 }
 
 // sortByScore sorts ranked facts in descending order by score.

@@ -47,7 +47,7 @@ Imprint watches transcript files, extracts facts, entities, and relationships, d
          │                   │
          │  1. Extract (LLM) │──── Provider Chain (Google/Anthropic/Ollama)
          │  2. Embed         │──── Embedder Chain (OpenAI/Ollama)
-         │  3. Store         │──── DB (SQLite + sqlite-vec)
+         │  3. Store         │──── DB (SQLite + USearch sidecar)
          │  4. Log           │──── extraction_log
          └────────┬──────────┘
                   │
@@ -67,7 +67,7 @@ Imprint watches transcript files, extracts facts, entities, and relationships, d
                   │                   │                   │
          ┌────────▼─────────┐ ┌───────▼───────┐  ┌────────▼────────┐
          │    DB Layer      │ │  Transcript   │  │  Transport      │
-         │  SQLite + vec0   │ │  Files (disk) │  │  HTTP/MCP/CLI   │
+         │  SQLite + USearch│ │  Files (disk) │  │  HTTP/MCP/CLI   │
          │                  │ │  (source of   │  │                 │
          │  facts, entities │ │   truth)      │  │                 │
          │  relationships   │ │               │  │                 │
@@ -139,7 +139,10 @@ These mechanisms run autonomously. No configuration changes needed -- they activ
 ### Build from source
 
 ```bash
-# Requires Go 1.26+ and a C compiler (for SQLite + FTS5)
+# Requires Go 1.26+, a C compiler (SQLite + FTS5), and the USearch C library.
+# Install USearch: https://github.com/unum-cloud/USearch/releases (e.g. .deb on Linux, .zip on macOS).
+# Link the C library when building (example when it is not on the default linker path):
+#   export CGO_LDFLAGS="-L/usr/local/lib -lusearch_c"
 git clone https://github.com/aegis-alpha/imprint-mace.git
 cd imprint-mace
 CGO_ENABLED=1 go build -tags sqlite_fts5 -o imprint ./cmd/imprint
@@ -209,6 +212,9 @@ echo "Alice decided to use Go for Acme." | ./imprint ingest
 
 # Evaluate retrieval without embedder (graceful degradation test)
 ./imprint eval-retrieval --no-embedder
+
+# Compare merge strategies (default: rrf; alternative: set-union dense-first ordering)
+./imprint eval-retrieval --merge-strategy=set-union
 
 # Run one prompt optimization cycle (Karpathy loop)
 ./imprint optimize
@@ -479,21 +485,21 @@ Measured on commodity hardware (single-core SQLite, no tuning).
 | Decision | Rationale |
 |----------|-----------|
 | Go, single binary | Cross-platform, no runtime deps, goroutines for concurrency |
-| SQLite (single embedded file) | Graph via recursive CTE (12ms at 200K rels), vector via sqlite-vec, FTS via FTS5. No separate server, no runtime dependencies. |
+| SQLite (single embedded file) | Graph via recursive CTE (12ms at 200K rels), vector similarity via USearch (sidecar index + embedding BLOBs), FTS via FTS5. No separate server, no runtime database service. |
 | Library-first | Core is functions, not a server. Embed in your app or wrap with any transport. |
 | ULID for IDs | Chronologically sortable, important for temporal ordering of facts |
 | Config-driven taxonomy | Types in TOML, rendered into prompts at runtime. Change types without changing code. |
 | Provider chain with auto-healing | No single point of failure. If one LLM is down, the next is tried automatically. Error classification (transient vs auth vs model-not-found) drives retry logic. Exhausted providers are flagged in the knowledge base. Model substitution via prefix matching when configured models disappear. |
 | Transcripts as source of truth | DB is a derived index. Files on disk hold the full conversation. Facts back-reference file + line range. Query enriches from disk. |
 | Embedding model metadata | Each embedding stored with model name. On provider switch: selective re-embedding or adapter -- no full re-embedding needed. |
-| vec0 created programmatically | sqlite-vec virtual table created in Go code (not SQL migration) because dimensions come from config at runtime. |
+| USearch sidecar index | Vector ANN lives in a `.vecindex` file next to the DB; dimensions come from config at runtime. Embeddings are also stored as BLOBs on rows for durability. |
 
 ## Contributing
 
 Contributions are welcome. Please open an issue to discuss what you'd like to change before submitting a PR.
 
 ```bash
-# Run tests (requires CGo for SQLite + FTS5)
+# Run tests (requires CGO for SQLite + FTS5 + USearch C library)
 CGO_ENABLED=1 go test -tags sqlite_fts5 ./...
 ```
 
