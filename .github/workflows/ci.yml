@@ -69,6 +69,7 @@ jobs:
           CGO_ENABLED: "1"
           CGO_CFLAGS: -I/usr/local/include
           CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
+          IMPRINT_SKIP_USEARCH: "1"
         run: |
           go test -tags sqlite_fts5 -race -timeout 10m -coverprofile=coverage.out ./...
           go tool cover -func=coverage.out | tail -1
