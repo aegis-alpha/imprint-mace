@@ -480,6 +480,91 @@ func TestEffectiveHealthConfig_Overrides(t *testing.T) {
 	}
 }
 
+func TestHotConfig_Defaults(t *testing.T) {
+	cfg := &Config{}
+	h := cfg.EffectiveHotConfig()
+	if h.TTLMinutes != 60 {
+		t.Errorf("expected TTLMinutes 60, got %d", h.TTLMinutes)
+	}
+	if h.TickSeconds != 60 {
+		t.Errorf("expected TickSeconds 60, got %d", h.TickSeconds)
+	}
+	if h.BatchSize != 100 {
+		t.Errorf("expected BatchSize 100, got %d", h.BatchSize)
+	}
+	if h.EmbedMinChars != 50 {
+		t.Errorf("expected EmbedMinChars 50, got %d", h.EmbedMinChars)
+	}
+	if cfg.HotEnabled() {
+		t.Error("HotEnabled should be false when hot.enabled is omitted")
+	}
+}
+
+func TestHotConfig_Override(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[prompts]
+extraction = "prompts/extraction.md"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 30
+priority = 1
+
+[hot]
+enabled = true
+ttl_minutes = 30
+tick_seconds = 10
+batch_size = 50
+embed_min_chars = 100
+`
+	cfg := loadFromString(t, content)
+	h := cfg.EffectiveHotConfig()
+	if h.TTLMinutes != 30 || h.TickSeconds != 10 || h.BatchSize != 50 || h.EmbedMinChars != 100 {
+		t.Errorf("effective hot config wrong: %+v", h)
+	}
+	if !cfg.HotEnabled() {
+		t.Error("expected HotEnabled true")
+	}
+}
+
+func TestHotConfig_DisabledByDefault(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[prompts]
+extraction = "prompts/extraction.md"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 30
+priority = 1
+
+[hot]
+ttl_minutes = 120
+`
+	cfg := loadFromString(t, content)
+	if cfg.HotEnabled() {
+		t.Error("expected hot disabled when enabled flag not set to true")
+	}
+	h := cfg.EffectiveHotConfig()
+	if h.TTLMinutes != 120 {
+		t.Errorf("expected TTLMinutes 120, got %d", h.TTLMinutes)
+	}
+	if h.TickSeconds != 60 {
+		t.Errorf("expected default TickSeconds 60, got %d", h.TickSeconds)
+	}
+}
+
 // --- helpers ---
 
 func loadFromString(t *testing.T, content string) *Config {

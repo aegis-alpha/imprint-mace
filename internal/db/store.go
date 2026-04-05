@@ -152,6 +152,11 @@ type Store interface {
 	MoveHotToCooldown(ctx context.Context, olderThan time.Time, batchSize int) (moved int64, err error)
 	DeleteExpiredHot(ctx context.Context, olderThan time.Time) (int64, error)
 	CountHotMessages(ctx context.Context) (int, error)
+	// GetRecentHotMessages returns hot rows for a platform session newest-first (timestamp, then created_at, then id).
+	GetRecentHotMessages(ctx context.Context, platformSessionID string, limit int) ([]model.HotMessage, error)
+	// GetLinkedMessages walks linker_ref from messageID through hot and cooldown rows.
+	// Returned order is chronological (oldest first); the requested message is last. Cycles stop traversal; a missing linker_ref target returns an error once at least one row was loaded.
+	GetLinkedMessages(ctx context.Context, messageID string) ([]model.HotMessage, error)
 
 	// Lifecycle
 	Close() error
@@ -285,6 +290,10 @@ type QueryLog struct {
 	FactsByGraph       int
 	ChunksByVector     int
 	ChunksByText       int
+	HotByVector        int
+	HotByText          int
+	CooldownByVector   int
+	CooldownByText     int
 	CitationsCount     int
 	EmbedderAvailable  bool
 	Error              string

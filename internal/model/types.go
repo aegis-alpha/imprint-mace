@@ -150,6 +150,8 @@ type ExtractionResult struct {
 type Citation struct {
 	FactID          string `json:"fact_id,omitempty"`
 	ConsolidationID string `json:"consolidation_id,omitempty"`
+	// HotMessageID cites a raw message: "hot:<ULID>" or "cool:<ULID>" matching synthesis prompt tags.
+	HotMessageID string `json:"hot_message_id,omitempty"`
 }
 
 type QueryResult struct {

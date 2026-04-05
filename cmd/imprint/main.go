@@ -22,7 +22,6 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/api"
 	"github.com/aegis-alpha/imprint-mace/internal/config"
 	"github.com/aegis-alpha/imprint-mace/internal/consolidation"
-	"github.com/aegis-alpha/imprint-mace/internal/quality"
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	impeval "github.com/aegis-alpha/imprint-mace/internal/eval"
@@ -32,6 +31,7 @@ import (
 	impmcp "github.com/aegis-alpha/imprint-mace/internal/mcp"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
+	"github.com/aegis-alpha/imprint-mace/internal/quality"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
 	"github.com/aegis-alpha/imprint-mace/internal/transcript"
 	"github.com/aegis-alpha/imprint-mace/internal/update"
@@ -276,6 +276,33 @@ func openStore(logger *slog.Logger, cfg *config.Config) *db.SQLiteStore {
 	return store
 }
 
+func newEmbedderChainOptional(cfg *config.Config) provider.Embedder {
+	embChain, err := provider.NewEmbedderChain(cfg.Providers.Embedding)
+	if err != nil || embChain == nil {
+		return nil
+	}
+	return embChain
+}
+
+func startHotTTLGoroutine(ctx context.Context, store db.Store, hotCfg config.HotConfig, logger *slog.Logger) {
+	ticker := time.NewTicker(time.Duration(hotCfg.TickSeconds) * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().UTC().Add(-time.Duration(hotCfg.TTLMinutes) * time.Minute)
+			moved, err := store.MoveHotToCooldown(ctx, cutoff, hotCfg.BatchSize)
+			if err != nil {
+				logger.Error("hot TTL move failed", "error", err)
+				continue
+			}
+			logger.Info("hot TTL tick", "moved_to_cooldown", moved)
+		}
+	}
+}
+
 func createEngine(logger *slog.Logger, cfg *config.Config, store db.Store) *imprint.Engine {
 	chain, err := provider.NewChain(cfg.Providers.Extraction)
 	if err != nil {
@@ -334,7 +361,20 @@ func createQuerier(logger *slog.Logger, cfg *config.Config, store db.Store) *que
 		transcriptDir = cfg.Watcher.Path
 	}
 
-	return query.New(store, embedder, chain, transcriptDir, logger)
+	var qOpts []query.QuerierOption
+	if len(cfg.Providers.Reranker) > 1 {
+		logger.Warn("multiple [[providers.reranker]] entries configured; only the first is used")
+	}
+	if len(cfg.Providers.Reranker) > 0 {
+		rr, err := query.NewRerankerFromConfig(cfg.Providers.Reranker[0])
+		if err != nil {
+			logger.Warn("reranker disabled", "error", err)
+		} else {
+			qOpts = append(qOpts, query.WithReranker(rr, cfg.Rerank.TopN))
+		}
+	}
+
+	return query.New(store, embedder, chain, transcriptDir, logger, qOpts...)
 }
 
 func createBuilder(cfg *config.Config, store db.Store, logger *slog.Logger) *impctx.Builder {
@@ -979,6 +1019,27 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		handler.SetCollector(collector)
 	}
 
+	hotEffective := cfg.EffectiveHotConfig()
+	handler.SetEmbedder(newEmbedderChainOptional(cfg))
+	handler.SetHotEnabled(cfg.HotEnabled())
+	handler.SetHotEmbedMinChars(hotEffective.EmbedMinChars)
+
+	var hotCancel context.CancelFunc
+	if cfg.HotEnabled() {
+		hotCtx, cancel := context.WithCancel(context.Background())
+		hotCancel = cancel
+		go startHotTTLGoroutine(hotCtx, store, hotEffective, logger)
+		logger.Info("hot phase TTL goroutine started",
+			"ttl_minutes", hotEffective.TTLMinutes,
+			"tick_seconds", hotEffective.TickSeconds,
+			"batch_size", hotEffective.BatchSize)
+	}
+	defer func() {
+		if hotCancel != nil {
+			hotCancel()
+		}
+	}()
+
 	ln, actualAddr, err := listenWithFallback(addr, 20, logger)
 	if err != nil {
 		logger.Error("no available port found", "base_addr", addr, "error", err)
@@ -993,6 +1054,9 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 	go func() {
 		<-sigCh
 		logger.Info("shutting down HTTP API server")
+		if hotCancel != nil {
+			hotCancel()
+		}
 		removeServeInfo()
 		ln.Close() //nolint:gosec // shutdown path; process exits immediately after
 		os.Exit(0)
@@ -1016,6 +1080,10 @@ func runMCP(logger *slog.Logger, cfgPath string) {
 	builder := createBuilder(cfg, store, logger)
 
 	srv := impmcp.NewWithBuilder(eng, store, q, builder, version, logger)
+	hotEffective := cfg.EffectiveHotConfig()
+	srv.SetEmbedder(newEmbedderChainOptional(cfg))
+	srv.SetHotEnabled(cfg.HotEnabled())
+	srv.SetHotEmbedMinChars(hotEffective.EmbedMinChars)
 	if err := srv.Run(context.Background()); err != nil {
 		logger.Error("mcp server failed", "error", err)
 		os.Exit(1)
@@ -1427,6 +1495,17 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 	var qOpts []query.QuerierOption
 	if mergeStrategy != "" && mergeStrategy != "rrf" {
 		qOpts = append(qOpts, query.WithMergeStrategy(mergeStrategy))
+	}
+	if cfg != nil && len(cfg.Providers.Reranker) > 1 {
+		logger.Warn("eval: multiple [[providers.reranker]] entries; only the first is used")
+	}
+	if cfg != nil && len(cfg.Providers.Reranker) > 0 {
+		rr, err := query.NewRerankerFromConfig(cfg.Providers.Reranker[0])
+		if err != nil {
+			logger.Warn("eval: reranker disabled", "error", err)
+		} else {
+			qOpts = append(qOpts, query.WithReranker(rr, cfg.Rerank.TopN))
+		}
 	}
 	q := query.New(tmpStore, embedder, sender, "", logger, qOpts...)
 

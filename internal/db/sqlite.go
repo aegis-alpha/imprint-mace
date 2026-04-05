@@ -2037,11 +2037,15 @@ func (s *SQLiteStore) CreateQueryLog(ctx context.Context, l *QueryLog) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO query_log (id, endpoint, question, total_latency_ms, retrieval_latency_ms,
 			synthesis_latency_ms, facts_found, facts_by_vector, facts_by_text, facts_by_graph,
-			chunks_by_vector, chunks_by_text, citations_count, embedder_available, error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			chunks_by_vector, chunks_by_text, hot_by_vector, hot_by_text,
+			cooldown_by_vector, cooldown_by_text,
+			citations_count, embedder_available, error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		l.ID, l.Endpoint, l.Question, l.TotalLatencyMs, l.RetrievalLatencyMs,
 		l.SynthesisLatencyMs, l.FactsFound, l.FactsByVector, l.FactsByText, l.FactsByGraph,
-		l.ChunksByVector, l.ChunksByText, l.CitationsCount, embedder, nilIfEmpty(l.Error),
+		l.ChunksByVector, l.ChunksByText, l.HotByVector, l.HotByText,
+		l.CooldownByVector, l.CooldownByText,
+		l.CitationsCount, embedder, nilIfEmpty(l.Error),
 		timeStr(l.CreatedAt),
 	)
 	return err
@@ -2050,7 +2054,9 @@ func (s *SQLiteStore) CreateQueryLog(ctx context.Context, l *QueryLog) error {
 func (s *SQLiteStore) ListQueryLogs(ctx context.Context, limit int) ([]QueryLog, error) {
 	q := `SELECT id, endpoint, question, total_latency_ms, retrieval_latency_ms,
 		synthesis_latency_ms, facts_found, facts_by_vector, facts_by_text, facts_by_graph,
-		chunks_by_vector, chunks_by_text, citations_count, embedder_available, error, created_at
+		chunks_by_vector, chunks_by_text, hot_by_vector, hot_by_text,
+		cooldown_by_vector, cooldown_by_text,
+		citations_count, embedder_available, error, created_at
 		FROM query_log ORDER BY created_at DESC`
 	if limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d", limit)
@@ -2070,7 +2076,9 @@ func (s *SQLiteStore) ListQueryLogs(ctx context.Context, limit int) ([]QueryLog,
 		if err := rows.Scan(&l.ID, &l.Endpoint, &l.Question, &l.TotalLatencyMs,
 			&l.RetrievalLatencyMs, &l.SynthesisLatencyMs, &l.FactsFound,
 			&l.FactsByVector, &l.FactsByText, &l.FactsByGraph,
-			&l.ChunksByVector, &l.ChunksByText, &l.CitationsCount,
+			&l.ChunksByVector, &l.ChunksByText,
+			&l.HotByVector, &l.HotByText, &l.CooldownByVector, &l.CooldownByText,
+			&l.CitationsCount,
 			&embedder, &errStr, &createdAtStr); err != nil {
 			return nil, err
 		}
@@ -2442,6 +2450,86 @@ func scanHotMessage(row scanner) (*model.HotMessage, error) {
 	m.LinkerRef = linker.String
 	m.HasEmbedding = hasEmb != 0
 	return &m, nil
+}
+
+func (s *SQLiteStore) GetRecentHotMessages(ctx context.Context, platformSessionID string, limit int) ([]model.HotMessage, error) {
+	if platformSessionID == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+		FROM hot_messages
+		WHERE platform_session_id = ?
+		ORDER BY timestamp DESC, created_at DESC, id DESC
+		LIMIT ?`, platformSessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []model.HotMessage
+	for rows.Next() {
+		m, err := scanHotMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+// getHotOrCooldownMessage loads a message by id from hot_messages, then cooldown_messages.
+func (s *SQLiteStore) getHotOrCooldownMessage(ctx context.Context, id string) (*model.HotMessage, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+		FROM hot_messages WHERE id = ?`, id)
+	m, err := scanHotMessage(row)
+	if err == nil {
+		return m, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	row2 := s.db.QueryRowContext(ctx, `
+		SELECT id, speaker, content, timestamp, platform, platform_session_id, linker_ref, has_embedding, created_at
+		FROM cooldown_messages WHERE id = ?`, id)
+	return scanHotMessage(row2)
+}
+
+const maxLinkerChainHops = 10000
+
+func (s *SQLiteStore) GetLinkedMessages(ctx context.Context, messageID string) ([]model.HotMessage, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return nil, fmt.Errorf("db: empty message id")
+	}
+	seen := make(map[string]struct{})
+	var rev []model.HotMessage
+	currID := messageID
+	for currID != "" && len(rev) < maxLinkerChainHops {
+		if _, dup := seen[currID]; dup {
+			break
+		}
+		seen[currID] = struct{}{}
+		m, err := s.getHotOrCooldownMessage(ctx, currID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				if len(rev) == 0 {
+					return nil, ErrNotFound
+				}
+				return nil, fmt.Errorf("db: linker_ref target not found: %q", currID)
+			}
+			return nil, err
+		}
+		rev = append(rev, *m)
+		currID = strings.TrimSpace(m.LinkerRef)
+	}
+	for i, j := 0, len(rev)-1; i < j; i, j = i+1, j-1 {
+		rev[i], rev[j] = rev[j], rev[i]
+	}
+	return rev, nil
 }
 
 func (s *SQLiteStore) InsertHotMessage(ctx context.Context, msg *model.HotMessage, embedding []float32) error {

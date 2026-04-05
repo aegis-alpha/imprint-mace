@@ -24,6 +24,47 @@ type Config struct {
 	Quality       QualityConfig       `toml:"quality"`
 	Health        HealthConfig        `toml:"health"`
 	OpenClaw      OpenClawConfig      `toml:"openclaw"`
+	Hot           HotConfig           `toml:"hot"`
+	Rerank        RerankConfig        `toml:"rerank"`
+}
+
+// RerankConfig controls optional post-merge reranking; see [[providers.reranker]].
+type RerankConfig struct {
+	// TopN: if > 0, only the first N merged items may participate in reranking (fact-only prefix).
+	// 0 means use the full merged list length for the rerank window.
+	TopN int `toml:"top_n"`
+}
+
+// HotConfig controls the hot-phase raw message store (HOT-PHASE-SPEC, BVP-353).
+type HotConfig struct {
+	Enabled       *bool `toml:"enabled"`
+	TTLMinutes    int   `toml:"ttl_minutes"`
+	TickSeconds   int   `toml:"tick_seconds"`
+	BatchSize     int   `toml:"batch_size"`
+	EmbedMinChars int   `toml:"embed_min_chars"`
+}
+
+// EffectiveHotConfig returns hot settings with defaults applied.
+func (c *Config) EffectiveHotConfig() HotConfig {
+	h := c.Hot
+	if h.TTLMinutes == 0 {
+		h.TTLMinutes = 60
+	}
+	if h.TickSeconds == 0 {
+		h.TickSeconds = 60
+	}
+	if h.BatchSize == 0 {
+		h.BatchSize = 100
+	}
+	if h.EmbedMinChars == 0 {
+		h.EmbedMinChars = 50
+	}
+	return h
+}
+
+// HotEnabled reports whether the hot ingest path is active.
+func (c *Config) HotEnabled() bool {
+	return c.Hot.Enabled != nil && *c.Hot.Enabled
 }
 
 type APIConfig struct {
@@ -48,14 +89,15 @@ type ProviderChains struct {
 	Consolidation []model.ProviderConfig `toml:"consolidation"`
 	Query         []model.ProviderConfig `toml:"query"`
 	Embedding     []model.ProviderConfig `toml:"embedding"`
+	Reranker      []model.ProviderConfig `toml:"reranker"`
 }
 
 type ConsolidationConfig struct {
-	IntervalMinutes             int     `toml:"interval_minutes"`
-	MinFacts                    int     `toml:"min_facts"`
-	MaxGroupSize                int     `toml:"max_group_size"`
-	DedupSimilarityThreshold    float64 `toml:"dedup_similarity_threshold"`
-	ClusterSimilarityThreshold  float64 `toml:"cluster_similarity_threshold"`
+	IntervalMinutes            int     `toml:"interval_minutes"`
+	MinFacts                   int     `toml:"min_facts"`
+	MaxGroupSize               int     `toml:"max_group_size"`
+	DedupSimilarityThreshold   float64 `toml:"dedup_similarity_threshold"`
+	ClusterSimilarityThreshold float64 `toml:"cluster_similarity_threshold"`
 }
 
 func (c *Config) EffectiveClusterSimilarityThreshold() float64 {
@@ -118,10 +160,10 @@ func (c *Config) EffectiveGCAfterDays() int {
 }
 
 type WatcherConfig struct {
-	Path                    string `toml:"path"`
-	PollIntervalSeconds     int    `toml:"poll_interval_seconds"`
-	DebounceSeconds         int    `toml:"debounce_seconds"`
-	ConsolidateAfterIngest  bool   `toml:"consolidate_after_ingest"`
+	Path                   string `toml:"path"`
+	PollIntervalSeconds    int    `toml:"poll_interval_seconds"`
+	DebounceSeconds        int    `toml:"debounce_seconds"`
+	ConsolidateAfterIngest bool   `toml:"consolidate_after_ingest"`
 }
 
 type PromptPaths struct {

@@ -881,10 +881,11 @@ The merged output uses a unified type that can hold either a fact or a raw messa
 
 ```go
 type rankedItem struct {
-    fact       *model.Fact       // non-nil for cold results
-    hotMessage *model.HotMessage // non-nil for hot/cooldown results
-    score      float64
-    isHot      bool              // true for both hot and cooldown messages
+    fact                  *model.Fact       // non-nil for cold results
+    hotMessage            *model.HotMessage  // non-nil for hot/cooldown results
+    score                 float64
+    isRawMessage          bool              // true for both hot and cooldown messages
+    messageCitationPrefix string            // "hot:" or "cool:" for raw rows; empty for facts
 }
 ```
 
@@ -894,11 +895,13 @@ The `mergeAndRank` method signature does not change its return arity -- it retur
 func (q *Querier) mergeAndRank(r *retrievalResult) []rankedItem
 ```
 
-The existing `rankedFact` type is replaced by `rankedItem`. The `Retrieve()` public method (used by eval) continues to work: it filters `rankedItem` entries where `isHot == false` to build `[]RankedFact`. Hot messages are excluded from `RetrievalResult` since the eval pipeline only measures cold retrieval quality. A future `RetrieveWithHot()` method can expose hot results when needed.
+The existing `rankedFact` type is replaced by `rankedItem`. The `Retrieve()` public method (used by eval) continues to work: it filters `rankedItem` entries where `fact != nil` (structured facts only) to build `[]RankedFact`. Raw hot and cooldown messages are excluded from `RetrievalResult` since the eval pipeline only measures cold retrieval quality. A future `RetrieveWithHot()` method can expose hot results when needed.
 
 ### 7.5 LLM Synthesis Prompt
 
 The synthesis prompt gains a new section for hot messages. The prompt structure becomes:
+
+Cooldown-layer hits use the same section with a `[cool:<id>]` tag so citations can use `cool:<ULID>` in `hot_message_id`, consistent with RRF keys.
 
 ```
 ### Question

@@ -14,17 +14,22 @@ import (
 	impctx "github.com/aegis-alpha/imprint-mace/internal/context"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/imprint"
+	"github.com/aegis-alpha/imprint-mace/internal/ingest"
 	"github.com/aegis-alpha/imprint-mace/internal/model"
+	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
 )
 
 type Server struct {
-	engine  *imprint.Engine
-	store   db.Store
-	querier *query.Querier
-	builder *impctx.Builder
-	logger  *slog.Logger
-	mcp     *server.MCPServer
+	engine           *imprint.Engine
+	store            db.Store
+	querier          *query.Querier
+	builder          *impctx.Builder
+	logger           *slog.Logger
+	mcp              *server.MCPServer
+	embedder         provider.Embedder
+	hotEnabled       bool
+	hotEmbedMinChars int
 }
 
 func New(engine *imprint.Engine, store db.Store, querier *query.Querier, version string, logger *slog.Logger) *Server {
@@ -33,11 +38,12 @@ func New(engine *imprint.Engine, store db.Store, querier *query.Querier, version
 
 func NewWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Querier, builder *impctx.Builder, version string, logger *slog.Logger) *Server {
 	s := &Server{
-		engine:  engine,
-		store:   store,
-		querier: querier,
-		builder: builder,
-		logger:  logger,
+		engine:           engine,
+		store:            store,
+		querier:          querier,
+		builder:          builder,
+		logger:           logger,
+		hotEmbedMinChars: 50,
 	}
 
 	opts := []server.ServerOption{
@@ -55,13 +61,16 @@ func NewWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Queri
 
 	s.mcp.AddTool(
 		mcp.NewTool("imprint_ingest",
-			mcp.WithDescription("Extract facts, entities, and relationships from text and store in the knowledge graph."),
+			mcp.WithDescription("Store knowledge from text. When hot phase is enabled, stores the raw message for immediate search (no LLM). When disabled, extracts facts, entities, and relationships via LLM."),
 			mcp.WithString("text",
 				mcp.Required(),
 				mcp.Description("Text to extract knowledge from"),
 			),
 			mcp.WithString("source",
-				mcp.Description("Source identifier (e.g. session ID, filename)"),
+				mcp.Description("Source identifier (e.g. realtime:sessionId, filename)"),
+			),
+			mcp.WithString("mode",
+				mcp.Description(`Optional. Set to "extract" to force LLM extraction when hot phase is enabled.`),
 			),
 		),
 		s.handleIngest,
@@ -185,6 +194,24 @@ func NewWithBuilder(engine *imprint.Engine, store db.Store, querier *query.Queri
 	return s
 }
 
+// SetEmbedder sets the embedding provider for hot-path ingest (nil disables hot embeddings).
+func (s *Server) SetEmbedder(e provider.Embedder) {
+	s.embedder = e
+}
+
+// SetHotEnabled switches imprint_ingest to raw hot storage when true.
+func (s *Server) SetHotEnabled(enabled bool) {
+	s.hotEnabled = enabled
+}
+
+// SetHotEmbedMinChars sets the minimum text length for synchronous embedding on hot ingest (default 50).
+func (s *Server) SetHotEmbedMinChars(n int) {
+	if n <= 0 {
+		n = 50
+	}
+	s.hotEmbedMinChars = n
+}
+
 // Run starts the MCP server on stdin/stdout.
 // ctx is accepted for interface compatibility but not used --
 // mcp-go ServeStdio does not support context cancellation.
@@ -203,6 +230,15 @@ func (s *Server) handleIngest(ctx context.Context, req mcp.CallToolRequest) (*mc
 		source = v
 	}
 
+	mode := ""
+	if v, err := req.RequireString("mode"); err == nil {
+		mode = strings.TrimSpace(v)
+	}
+
+	if s.hotEnabled && !strings.EqualFold(mode, "extract") {
+		return s.handleHotIngest(ctx, text, source)
+	}
+
 	result, err := s.engine.Ingest(ctx, text, source)
 	if err != nil {
 		s.logger.Error("ingest failed", "error", err)
@@ -211,6 +247,56 @@ func (s *Server) handleIngest(ctx context.Context, req mcp.CallToolRequest) (*mc
 
 	data, _ := json.Marshal(result)
 	return mcp.NewToolResultText(string(data)), nil
+}
+
+type hotIngestMCPResponse struct {
+	ID           string `json:"id"`
+	HasEmbedding bool   `json:"has_embedding"`
+	Hot          bool   `json:"hot"`
+}
+
+func (s *Server) handleHotIngest(ctx context.Context, text, source string) (*mcp.CallToolResult, error) {
+	now := time.Now().UTC()
+	platform, psid := ingest.ParseHotIngestSource(source)
+
+	minChars := s.hotEmbedMinChars
+	if minChars <= 0 {
+		minChars = 50
+	}
+
+	msg := &model.HotMessage{
+		ID:                db.NewID(),
+		Speaker:           "user",
+		Content:           text,
+		Timestamp:         now,
+		Platform:          platform,
+		PlatformSessionID: psid,
+		HasEmbedding:      false,
+		CreatedAt:         now,
+	}
+
+	var embedding []float32
+	if len(text) >= minChars && s.embedder != nil {
+		vec, err := s.embedder.Embed(ctx, text)
+		if err != nil {
+			s.logger.Warn("hot ingest embedding failed", "error", err)
+		} else {
+			embedding = vec
+			msg.HasEmbedding = true
+		}
+	}
+
+	if err := ingest.ApplyHotLinkerRef(ctx, s.store, msg); err != nil {
+		s.logger.Warn("hot linker ref failed", "error", err)
+	}
+
+	if err := s.store.InsertHotMessage(ctx, msg, embedding); err != nil {
+		s.logger.Error("hot ingest insert failed", "error", err)
+		return mcp.NewToolResultError(fmt.Sprintf("ingest failed: %v", err)), nil
+	}
+
+	out, _ := json.Marshal(hotIngestMCPResponse{ID: msg.ID, HasEmbedding: msg.HasEmbedding, Hot: true})
+	return mcp.NewToolResultText(string(out)), nil
 }
 
 func (s *Server) handleStatus(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
