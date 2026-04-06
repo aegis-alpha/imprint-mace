@@ -85,6 +85,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 	for _, m := range messages {
 		result, err := eng.Ingest(ctx, m.text, m.source)
 		if err != nil {
+			maybeSkipProviderQuota(t, "ingest "+m.source, err)
 			t.Fatalf("ingest %q: %v", m.source, err)
 		}
 		t.Logf("ingested %s: %d facts, %d entities", m.source, result.FactsCount, result.EntitiesCount)
@@ -104,6 +105,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 	querier := query.New(store, nil, chain, "", logger)
 	qResult, err := querier.Query(ctx, "What database does Acme use?")
 	if err != nil {
+		maybeSkipProviderQuota(t, "query", err)
 		t.Fatalf("query: %v", err)
 	}
 	if qResult.Answer == "" {
@@ -132,6 +134,7 @@ func TestIntegration_FullPipeline(t *testing.T) {
 
 	cResults, err := consol.Consolidate(ctx, 50)
 	if err != nil {
+		maybeSkipProviderQuota(t, "consolidate", err)
 		t.Fatalf("consolidate: %v", err)
 	}
 	if len(cResults) == 0 {
