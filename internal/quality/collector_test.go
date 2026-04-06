@@ -163,6 +163,59 @@ func TestCollectSupersedeRates_ColdStart(t *testing.T) {
 	}
 }
 
+func TestCollectContradictionSupersedeRates(t *testing.T) {
+	store, sqlDB := setupTestDB(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	now := time.Now().UTC()
+	// 40 decision facts total: 10 contradiction-superseded, 6 superseded for other reasons.
+	for i := 0; i < 40; i++ {
+		factID := db.NewID()
+		var supersededBy any
+		var supersedeReason any
+		switch {
+		case i < 10:
+			supersededBy = sentinelFactID
+			supersedeReason = "contradiction:model-judged-update"
+		case i < 16:
+			supersededBy = sentinelFactID
+			supersedeReason = "batch-replaced"
+		}
+		_, err := sqlDB.Exec(`
+			INSERT INTO facts (id, source_file, fact_type, content, confidence, superseded_by, supersede_reason, created_at)
+			VALUES (?, 'test.md', 'decision', ?, 0.8, ?, ?, ?)`,
+			factID, fmt.Sprintf("decision %d", i), supersededBy, supersedeReason, now.Add(-time.Duration(i)*time.Hour).Format(time.RFC3339))
+		if err != nil {
+			t.Fatalf("insert test fact: %v", err)
+		}
+	}
+
+	c := NewCollector(sqlDB, store, testConfig(), logger)
+	n, err := c.collectContradictionSupersedeRates(ctx)
+	if err != nil {
+		t.Fatalf("collectContradictionSupersedeRates: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 contradiction supersede signal, got %d", n)
+	}
+
+	signals, err := store.ListQualitySignals(ctx, SignalContradictionSupersedeRate, 10)
+	if err != nil {
+		t.Fatalf("ListQualitySignals: %v", err)
+	}
+	if len(signals) != 1 {
+		t.Fatalf("expected 1 signal, got %d", len(signals))
+	}
+	if signals[0].Category != "decision" {
+		t.Errorf("expected category 'decision', got %q", signals[0].Category)
+	}
+	// Expect ~10/40 = 0.25 (decay may shift slightly).
+	if signals[0].Value < 0.18 || signals[0].Value > 0.32 {
+		t.Errorf("expected contradiction supersede rate near 0.25, got %.3f", signals[0].Value)
+	}
+}
+
 func TestCollectEntityCollisionRate(t *testing.T) {
 	store, sqlDB := setupTestDB(t)
 	ctx := context.Background()

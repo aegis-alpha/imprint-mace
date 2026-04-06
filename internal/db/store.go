@@ -20,6 +20,9 @@ type Store interface {
 	GetFact(ctx context.Context, id string) (*model.Fact, error)
 	ListFacts(ctx context.Context, filter FactFilter) ([]model.Fact, error)
 	SupersedeFact(ctx context.Context, oldID, newID string) error
+	// SupersedeFactByContradiction marks oldID as superseded by newID with reason and valid_until.
+	// Only updates rows that are not already superseded (superseded_by NULL or empty).
+	SupersedeFactByContradiction(ctx context.Context, oldID, newID string, reason string, validUntil time.Time) error
 	UpdateFact(ctx context.Context, factID string, update FactUpdate) error
 	SupersedeWithContent(ctx context.Context, oldFactID string, newContent string, source string) (*model.Fact, error)
 	UpdateFactEmbedding(ctx context.Context, factID string, embedding []float32, modelName string) error
@@ -170,6 +173,16 @@ type Store interface {
 	LinkCooldownToTranscript(ctx context.Context, platformSessionID, transcriptFile string) (int64, error)
 	MarkCooldownProcessedBySession(ctx context.Context, platformSessionID string) (int64, error)
 	CoolPipelineStats(ctx context.Context) (*CoolStats, error)
+
+	// Lint (BVP-368): SQL-only integrity diagnostics for CLI `imprint lint`.
+	LintStaleFacts(ctx context.Context) ([]LintStaleFact, error)
+	LintOrphanEntities(ctx context.Context) ([]LintOrphanEntity, error)
+	LintBrokenSupersedeChains(ctx context.Context) ([]LintBrokenSupersedeChain, error)
+	LintEntityDedupExact(ctx context.Context) ([]LintEntityDedupPair, error)
+	LintEntityDedupSubstring(ctx context.Context) ([]LintEntityDedupPair, error)
+	LintFactsMissingEmbeddingsByType(ctx context.Context) ([]LintMissingEmbeddingByType, error)
+	LintDistinctNonEmptySourceFiles(ctx context.Context) ([]string, error)
+	LintUnconsolidatedActiveFactsCount(ctx context.Context) (int, error)
 
 	// Lifecycle
 	Close() error

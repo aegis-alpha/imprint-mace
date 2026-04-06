@@ -2,6 +2,7 @@ package imprint
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -15,14 +16,16 @@ import (
 
 // IngestResult summarizes what a single Ingest call produced.
 type IngestResult struct {
-	FactsCount         int
-	EntitiesCount      int
-	RelationshipsCount int
-	EntityCollisions   int
-	EntityCreations    int
-	FactIDs            []string
-	EntityIDs          []string
-	RelationshipIDs    []string
+	FactsCount           int
+	EntitiesCount        int
+	RelationshipsCount   int
+	EntityCollisions     int
+	EntityCreations      int
+	FactIDs              []string
+	EntityIDs            []string
+	RelationshipIDs      []string
+	ContradictionChecked bool
+	FactsSuperseded      int
 }
 
 // Engine is the core library entry point (D6). It holds an Extractor,
@@ -32,17 +35,32 @@ type Engine struct {
 	extractor      *extraction.Extractor
 	store          db.Store
 	embedder       provider.Embedder // nil = embeddings disabled (D11)
-	dedupThreshold float64           // 0 = dedup disabled
-	contextTTLDays int               // 0 = no auto-expiry for context facts
+	dedupThreshold float64             // 0 = dedup disabled
+	contextTTLDays int                 // 0 = no auto-expiry for context facts
 	logger         *slog.Logger
+	contraEnabled  bool
+	contraSender   extraction.Sender
+	contraPrompt   string
+}
+
+// EngineOption configures Engine beyond the constructor parameters.
+type EngineOption func(*Engine)
+
+// WithContradiction enables batch LLM contradiction review after facts are stored.
+func WithContradiction(enabled bool, sender extraction.Sender, systemPrompt string) EngineOption {
+	return func(e *Engine) {
+		e.contraEnabled = enabled
+		e.contraSender = sender
+		e.contraPrompt = strings.TrimSpace(systemPrompt)
+	}
 }
 
 // New creates an Engine. Pass nil for embedder to disable embeddings.
 // dedupThreshold > 0 enables dedup: facts with cosine similarity above
-// the threshold are skipped during ingest.
+// the threshold are skipped during ingest when content Jaccard is also high.
 // contextTTLDays > 0 auto-sets valid_until on context-type facts.
-func New(extractor *extraction.Extractor, store db.Store, embedder provider.Embedder, dedupThreshold float64, contextTTLDays int, logger *slog.Logger) *Engine {
-	return &Engine{
+func New(extractor *extraction.Extractor, store db.Store, embedder provider.Embedder, dedupThreshold float64, contextTTLDays int, logger *slog.Logger, opts ...EngineOption) *Engine {
+	e := &Engine{
 		extractor:      extractor,
 		store:          store,
 		embedder:       embedder,
@@ -50,6 +68,10 @@ func New(extractor *extraction.Extractor, store db.Store, embedder provider.Embe
 		contextTTLDays: contextTTLDays,
 		logger:         logger,
 	}
+	for _, o := range opts {
+		o(e)
+	}
+	return e
 }
 
 // IngestOption configures a single Ingest call.
@@ -149,6 +171,9 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 		}
 	}
 
+	batchFactIDs := make(map[string]struct{})
+	var contraGroups []contradictionGroup
+
 	for i := range extracted.Facts {
 		var vec []float32
 		if e.embedder != nil {
@@ -163,11 +188,23 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 		if vec != nil && e.dedupThreshold > 0 {
 			similar, err := e.store.SearchByVector(ctx, vec, 1)
 			if err == nil && len(similar) > 0 && similar[0].Score > e.dedupThreshold {
-				e.logger.Info("dedup: skipping similar fact",
-					"new_content", extracted.Facts[i].Content,
-					"similar_to", similar[0].Fact.ID,
-					"similarity", similar[0].Score)
-				continue
+				if jaccardWords(extracted.Facts[i].Content, similar[0].Fact.Content) >= dedupContentJaccardMin {
+					e.logger.Info("dedup: skipping similar fact",
+						"new_content", extracted.Facts[i].Content,
+						"similar_to", similar[0].Fact.ID,
+						"similarity", similar[0].Score)
+					continue
+				}
+			}
+		}
+
+		var candidates []contradictionCandidate
+		if e.contraEnabled && e.contraSender != nil && e.contraPrompt != "" && vec != nil {
+			hits, serr := e.store.SearchByVector(ctx, vec, 5)
+			if serr != nil {
+				e.logger.Warn("contradiction: vector search failed", "error", serr)
+			} else {
+				candidates = filterContradictionCandidates(hits, extracted.Facts[i].Subject, batchFactIDs)
 			}
 		}
 
@@ -177,6 +214,7 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 			continue
 		}
 		result.FactIDs = append(result.FactIDs, extracted.Facts[i].ID)
+		batchFactIDs[extracted.Facts[i].ID] = struct{}{}
 
 		if vec != nil {
 			if err := e.store.UpdateFactEmbedding(ctx, extracted.Facts[i].ID, vec, e.embedder.ModelName()); err != nil {
@@ -184,8 +222,51 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 					"fact_id", extracted.Facts[i].ID, "error", err)
 			}
 		}
+
+		if len(candidates) > 0 {
+			contraGroups = append(contraGroups, contradictionGroup{
+				NewFact:    extracted.Facts[i],
+				Candidates: candidates,
+			})
+		}
 	}
 	result.FactsCount = len(result.FactIDs)
+
+	if e.contraEnabled && e.contraSender != nil && e.contraPrompt != "" && len(contraGroups) > 0 {
+		result.ContradictionChecked = true
+		decisions, modelName, tokens, durationMs, cerr := runContradictionBatch(ctx, e.contraSender, e.contraPrompt, contraGroups, e.logger)
+		if cerr != nil {
+			e.logger.Warn("contradiction batch failed", "error", cerr)
+			e.writeContradictionLog(ctx, false, modelName, len(contraGroups), 0, 0, tokens, durationMs, "batch_error", cerr.Error())
+		} else {
+			applied := 0
+			for _, d := range decisions {
+				newF, errN := e.store.GetFact(ctx, d.NewFactID)
+				oldF, errO := e.store.GetFact(ctx, d.OldFactID)
+				if errN != nil || errO != nil || newF == nil || oldF == nil {
+					e.logger.Warn("contradiction: missing fact for apply",
+						"new_id", d.NewFactID, "old_id", d.OldFactID)
+					continue
+				}
+				if !confidenceAllowsSupersede(*newF, *oldF) {
+					e.logger.Info("contradiction: skipped by confidence guard",
+						"new_id", d.NewFactID, "old_id", d.OldFactID)
+					continue
+				}
+				err := e.store.SupersedeFactByContradiction(ctx, d.OldFactID, d.NewFactID, formatContradictionReason(d.Rationale), newF.CreatedAt)
+				if err != nil {
+					if errors.Is(err, db.ErrNotFound) {
+						continue
+					}
+					e.logger.Warn("contradiction: supersede failed", "old_id", d.OldFactID, "error", err)
+					continue
+				}
+				applied++
+			}
+			result.FactsSuperseded = applied
+			e.writeContradictionLog(ctx, true, modelName, len(contraGroups), applied, len(decisions), tokens, durationMs, "", "")
+		}
+	}
 
 	for i := range extracted.Relationships {
 		r := &extracted.Relationships[i]
@@ -211,7 +292,32 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 		"facts", result.FactsCount,
 		"entities", result.EntitiesCount,
 		"relationships", result.RelationshipsCount,
+		"contradiction_checked", result.ContradictionChecked,
+		"facts_superseded", result.FactsSuperseded,
 	)
 
 	return result, nil
+}
+
+func (e *Engine) writeContradictionLog(ctx context.Context, success bool, modelName string, groupsSent, supersedesApplied, rawDecisions, tokens int, durationMs int64, errType, errMsg string) {
+	l := &db.ExtractionLog{
+		ID:                 db.NewID(),
+		ProviderName:       "contradiction-check",
+		Model:              modelName,
+		InputLength:        groupsSent,
+		TokensUsed:         tokens,
+		DurationMs:         durationMs,
+		Success:            success,
+		FactsCount:         supersedesApplied,
+		EntitiesCount:      rawDecisions,
+		RelationshipsCount: 0,
+		EntityCollisions:    0,
+		EntityCreations:     0,
+		ErrorType:           errType,
+		ErrorMessage:        errMsg,
+		CreatedAt:           time.Now(),
+	}
+	if err := e.store.CreateExtractionLog(ctx, l); err != nil {
+		e.logger.Warn("failed to write contradiction extraction log", "error", err)
+	}
 }

@@ -68,9 +68,10 @@ When `[hot] enabled = true` in config, `POST /ingest` and `imprint_ingest` store
 2. **Attach source.** If `WithLineOffset` was set, stamp every fact with the source file path and line range.
 3. **Context TTL.** If `contextTTLDays > 0`, auto-set `valid_until` on context-type facts that don't already have an expiry. This makes situational facts (e.g. "node-2 is offline") expire automatically.
 4. **Store entities.** Write each entity to the DB. Failures are logged and skipped (non-fatal).
-5. **Embed + dedup.** If an `Embedder` is configured, generate a vector embedding for each fact. If `dedupThreshold > 0`, search for existing facts with cosine similarity above the threshold -- if found, skip the duplicate.
-6. **Store facts.** Write each non-duplicate fact. Store its embedding alongside with the model name.
-7. **Resolve relationships.** The LLM returns relationships with entity names. The engine maps names to entity IDs (from the entities just stored) and writes the relationships. Unknown entity references are logged and skipped.
+5. **Embed + smart dedup.** If an `Embedder` is configured, generate a vector embedding for each fact. If `dedupThreshold > 0`, search for the nearest fact; skip only when similarity is above the threshold **and** word-level Jaccard similarity of `content` is high (so near-duplicate wording is skipped, but a materially different claim at high cosine is still stored).
+6. **Store facts.** Write each surviving fact and its embedding. Candidate neighbors for contradiction review are collected before the new row is indexed: vector search (top few hits above a score floor), excluding already-superseded rows, same-batch IDs, and pairs whose subjects do not overlap enough (word Jaccard).
+7. **Contradiction batch (optional, BVP-316).** When enabled in config and a provider chain plus prompt are wired via `Engine` options, one LLM call reviews all `(new fact, candidates)` groups. The model returns which existing facts to soft-supersede. A code-level confidence guard blocks superseding a high-confidence stored fact with a low-confidence new fact unless the model output is still filtered by that rule (low new vs high old is rejected in Go). Applied supersedes set `superseded_by`, `supersede_reason` with a `contradiction:` prefix, and `valid_until` from the new fact's `created_at`. Runs are logged to `extraction_log` with `provider_name` `contradiction-check`.
+8. **Resolve relationships.** The LLM returns relationships with entity names. The engine maps names to entity IDs (from the entities just stored) and writes the relationships. Unknown entity references are logged and skipped.
 
 ### 1.4 Extraction
 

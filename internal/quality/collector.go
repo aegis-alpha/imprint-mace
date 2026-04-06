@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/config"
@@ -16,11 +17,12 @@ import (
 )
 
 const (
-	SignalSupersedeRate                = "supersede_rate"
-	SignalCitationRate                 = "citation_rate"
-	SignalVolumeAnomaly                = "volume_anomaly"
-	SignalEntityCollisionRate          = "entity_collision_rate"
-	SignalConfidenceCalibration        = "confidence_calibration"
+	SignalSupersedeRate                 = "supersede_rate"
+	SignalContradictionSupersedeRate    = "contradiction_supersede_rate"
+	SignalCitationRate                  = "citation_rate"
+	SignalVolumeAnomaly                 = "volume_anomaly"
+	SignalEntityCollisionRate           = "entity_collision_rate"
+	SignalConfidenceCalibration         = "confidence_calibration"
 	SignalConfidenceCitationCalibration = "confidence_citation_calibration"
 )
 
@@ -63,6 +65,7 @@ func (c *Collector) CollectAll(ctx context.Context) (int, error) {
 		fn   func(context.Context) (int, error)
 	}{
 		{"supersede_rate", c.collectSupersedeRates},
+		{"contradiction_supersede_rate", c.collectContradictionSupersedeRates},
 		{"citation_rate", c.collectCitationRates},
 		{"volume_anomaly", c.collectVolumeAnomalies},
 		{"entity_collision_rate", c.collectEntityCollisionRate},
@@ -150,6 +153,79 @@ func (c *Collector) collectSupersedeRates(ctx context.Context) (int, error) {
 			Value:     rate,
 			Details:   fmt.Sprintf(`{"sample_size":%d,"window_days":%d}`, acc.count, c.cfg.WindowDays),
 			CreatedAt: now,
+		}
+		if err := c.store.CreateQualitySignal(ctx, sig); err != nil {
+			return written, err
+		}
+		written++
+	}
+	return written, nil
+}
+
+// collectContradictionSupersedeRates computes weighted fraction of facts (per type)
+// whose latest supersede_reason tag starts with the contradiction prefix (BVP-316).
+func (c *Collector) collectContradictionSupersedeRates(ctx context.Context) (int, error) {
+	rows, err := c.sqlDB.QueryContext(ctx, `
+		SELECT fact_type, superseded_by, supersede_reason,
+			julianday('now') - julianday(created_at) AS age_days
+		FROM facts
+		WHERE created_at > datetime('now', '-' || ? || ' days')`,
+		c.cfg.WindowDays)
+	if err != nil {
+		return 0, fmt.Errorf("query facts for contradiction supersede: %w", err)
+	}
+	defer rows.Close()
+
+	type accumulator struct {
+		weightedContradiction float64
+		weightedTotal         float64
+		count                 int
+	}
+	byType := map[string]*accumulator{}
+	// Must match imprint.formatContradictionReason prefix (BVP-316).
+	const contradictionReasonPrefix = "contradiction:"
+
+	for rows.Next() {
+		var factType string
+		var supersededBy, supersedeReason sql.NullString
+		var ageDays float64
+		if err := rows.Scan(&factType, &supersededBy, &supersedeReason, &ageDays); err != nil {
+			return 0, err
+		}
+		acc, ok := byType[factType]
+		if !ok {
+			acc = &accumulator{}
+			byType[factType] = acc
+		}
+		w := decayWeight(ageDays, c.cfg.DecayHalfLifeDays)
+		acc.weightedTotal += w
+		if supersededBy.Valid && supersededBy.String != "" &&
+			supersedeReason.Valid && strings.HasPrefix(supersedeReason.String, contradictionReasonPrefix) {
+			acc.weightedContradiction += w
+		}
+		acc.count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var written int
+	now := time.Now()
+	for factType, acc := range byType {
+		if acc.count < 30 {
+			continue
+		}
+		rate := 0.0
+		if acc.weightedTotal > 0 {
+			rate = acc.weightedContradiction / acc.weightedTotal
+		}
+		sig := &db.QualitySignal{
+			ID:         db.NewID(),
+			SignalType: SignalContradictionSupersedeRate,
+			Category:   factType,
+			Value:      rate,
+			Details:    fmt.Sprintf(`{"sample_size":%d,"window_days":%d}`, acc.count, c.cfg.WindowDays),
+			CreatedAt:  now,
 		}
 		if err := c.store.CreateQualitySignal(ctx, sig); err != nil {
 			return written, err

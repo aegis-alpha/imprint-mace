@@ -6,8 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **BVP-316:** optional batch **contradiction review** on `Engine.Ingest()`: smart content dedup (cosine + Jaccard), neighbor retrieval with subject overlap, one LLM call per ingest, soft supersede via `SupersedeFactByContradiction` (`valid_until` + `superseded_by` + `supersede_reason`), `extraction_log` rows with `contradiction-check`, quality signal `contradiction_supersede_rate`. Config: `[quality] contradiction_detection`, `contradiction_prompt_path`; Prism task `X-Prism-Task: contradiction` when Prism mode is on.
+- **BVP-368:** `imprint lint`: SQL-only knowledge base integrity diagnostics (no LLM). Flags: `--format=table|json`, `--check=` comma-separated subset (`chains`, `stale`, `dedup`, `embeddings`, `orphans`, `sources`, `consolidation`). `sources` resolves `facts.source_file` against `[watcher].path` when that path is set. Store methods on `db.Store` for each query.
+
 ### Changed
 
+- `imprint lint`: exit status 1 when any ERROR-level check has findings; `sources` also reports paths that exist but cannot be `stat`d (e.g. permission errors); stale-facts action text clarifies `gc_after_days` vs immediate `valid_until` expiry.
 - Reranker is now provider-agnostic and always enabled in query flow: default local cosine reranking (zero-config, no API call) with optional HTTP provider rerank via `[[providers.reranker]]`. Generic client targets `/v1/rerank` with Cohere `/v2/rerank` compatibility. Cohere-specific client removed.
 - Added Prism mode via `[llm].base_url`: single-endpoint routing for extraction/query/consolidation/embedding/rerank with task headers (`X-Prism-Task`, `X-Prism-App`), direct `[[providers.*]]` chains ignored while active, and provider health checks skipped in this mode.
 

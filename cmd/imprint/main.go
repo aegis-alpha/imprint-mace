@@ -86,6 +86,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "  eval-history [--type=extraction|retrieval] [--limit=N] Show eval score history")
 		fmt.Fprintln(os.Stderr, "  optimize                  Run one prompt optimization cycle (Karpathy loop)")
 		fmt.Fprintln(os.Stderr, "  gc                        Delete expired facts (valid_until < now - gc_after_days)")
+		fmt.Fprintln(os.Stderr, "  lint [--format=table|json] [--check=a,b,...]  SQL-only KB integrity checks")
 		fmt.Fprintln(os.Stderr, "  version                   Print version and exit")
 		os.Exit(1)
 	}
@@ -247,6 +248,8 @@ func main() {
 		runOptimizeCmd(logger, *cfgPath)
 	case "gc":
 		runGC(logger, *cfgPath)
+	case "lint":
+		runLint(logger, *cfgPath, args[1:])
 	case "version":
 		fmt.Printf("imprint %s\n", version)
 	default:
@@ -295,6 +298,13 @@ func prismProviderConfig(cfg *config.Config, task string) model.ProviderConfig {
 			"X-Prism-App":  "imprint",
 		},
 	}
+}
+
+func contradictionProviderConfigs(cfg *config.Config) []model.ProviderConfig {
+	if prismModeEnabled(cfg) {
+		return []model.ProviderConfig{prismProviderConfig(cfg, "contradiction")}
+	}
+	return cfg.Providers.Extraction
 }
 
 func providerConfigsForTask(cfg *config.Config, task string) []model.ProviderConfig {
@@ -383,7 +393,25 @@ func createEngine(logger *slog.Logger, cfg *config.Config, store db.Store) *impr
 		logger.Info("embeddings enabled", "model", embChain.ModelName())
 	}
 
-	return imprint.New(extractor, store, embedder, cfg.Consolidation.DedupSimilarityThreshold, cfg.EffectiveContextTTLDays(), logger)
+	qeff := cfg.EffectiveQualityConfig()
+	var imprintOpts []imprint.EngineOption
+	if qeff.ContradictionDetection != nil && *qeff.ContradictionDetection {
+		contraPath := qeff.ContradictionPromptPath
+		rawPrompt, err := os.ReadFile(contraPath) //nolint:gosec // path from config
+		if err != nil {
+			logger.Warn("contradiction prompt unreadable; contradiction checks disabled", "path", contraPath, "error", err)
+		} else {
+			cChain, err := provider.NewChain(contradictionProviderConfigs(cfg))
+			if err != nil {
+				logger.Warn("contradiction provider chain unavailable; contradiction checks disabled", "error", err)
+			} else {
+				imprintOpts = append(imprintOpts, imprint.WithContradiction(true, cChain, string(rawPrompt)))
+				logger.Info("contradiction detection enabled", "prompt", contraPath)
+			}
+		}
+	}
+
+	return imprint.New(extractor, store, embedder, cfg.Consolidation.DedupSimilarityThreshold, cfg.EffectiveContextTTLDays(), logger, imprintOpts...)
 }
 
 func createQuerier(logger *slog.Logger, cfg *config.Config, store db.Store) *query.Querier {

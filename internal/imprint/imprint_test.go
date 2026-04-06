@@ -12,6 +12,7 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/config"
 	"github.com/aegis-alpha/imprint-mace/internal/db"
 	"github.com/aegis-alpha/imprint-mace/internal/extraction"
+	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 )
 
@@ -555,5 +556,261 @@ func TestIngest_CollisionStatsInExtractionLog(t *testing.T) {
 	}
 	if latest.EntityCreations != 1 {
 		t.Errorf("extraction_log: expected entity_creations=1, got %d", latest.EntityCreations)
+	}
+}
+
+// cbSender routes LLM calls by system prompt (extraction vs contradiction batch).
+type cbSender struct {
+	fn func(context.Context, provider.Request) (*provider.Response, error)
+}
+
+func (c *cbSender) Send(ctx context.Context, req provider.Request) (*provider.Response, error) {
+	return c.fn(ctx, req)
+}
+
+const testContradictionSystemPrompt = "# Contradiction review (batch)\nReturn JSON only.\n"
+
+func openStoreWithVec(t *testing.T, dims int) *db.SQLiteStore {
+	t.Helper()
+	store, err := db.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	if dims > 0 {
+		skipIfUSearchBroken(t)
+		if err := store.AttachVectorIndex(dims); err != nil {
+			t.Fatalf("AttachVectorIndex: %v", err)
+		}
+	}
+	return store
+}
+
+func newTestEngineWithContradiction(t *testing.T, store *db.SQLiteStore, sender extraction.Sender, embedder provider.Embedder, threshold float64) *Engine {
+	t.Helper()
+	ext, err := extraction.New(
+		sender,
+		promptPath(t),
+		config.DefaultTypes(),
+		slog.Default(),
+	)
+	if err != nil {
+		t.Fatalf("create extractor: %v", err)
+	}
+	return New(ext, store, embedder, threshold, 0, slog.Default(), WithContradiction(true, sender, testContradictionSystemPrompt))
+}
+
+func TestIngest_SmartDedup_AllowsDifferentContentAtHighCosine(t *testing.T) {
+	vec := []float32{0.5, 0.5, 0.5, 0.5}
+	embedder := &mockEmbedder{vec: vec}
+	sender := &mockSender{}
+
+	py39 := `{
+  "facts": [
+    {"fact_type": "project", "subject": "Acme", "content": "Acme uses Python 3.9.", "confidence": 0.9, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [],
+  "relationships": []
+}`
+	py312 := `{
+  "facts": [
+    {"fact_type": "project", "subject": "Acme", "content": "Acme uses Python 3.12.", "confidence": 0.9, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [],
+  "relationships": []
+}`
+
+	eng, store := testEngineWithDedup(t, sender, embedder, 4, 0.95)
+	ctx := context.Background()
+
+	sender.response = &provider.Response{Content: py39, ProviderName: "mock", Model: "test", TokensUsed: 50}
+	if _, err := eng.Ingest(ctx, "x", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	sender.response = &provider.Response{Content: py312, ProviderName: "mock", Model: "test", TokensUsed: 50}
+	if _, err := eng.Ingest(ctx, "y", "b.md"); err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+
+	facts, err := store.ListFacts(ctx, db.FactFilter{})
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	if len(facts) != 2 {
+		t.Fatalf("expected 2 facts (smart dedup allows different versions at high cosine), got %d", len(facts))
+	}
+}
+
+func TestIngest_ContradictionSupersedesPriorFact(t *testing.T) {
+	vec := []float32{0.2, 0.4, 0.6, 0.8}
+	embedder := &mockEmbedder{vec: vec}
+	store := openStoreWithVec(t, 4)
+
+	goFact := `{
+  "facts": [
+    {"fact_type": "decision", "subject": "Stack", "content": "We use Go for the API.", "confidence": 0.9, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [],
+  "relationships": []
+}`
+	rustFact := `{
+  "facts": [
+    {"fact_type": "decision", "subject": "Stack", "content": "We use Rust for the API.", "confidence": 0.85, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [],
+  "relationships": []
+}`
+
+	var call int
+	sender := &cbSender{fn: func(ctx context.Context, req provider.Request) (*provider.Response, error) {
+		call++
+		if strings.Contains(req.SystemPrompt, "Contradiction review") {
+			facts, err := store.ListFacts(ctx, db.FactFilter{Limit: 20})
+			if err != nil {
+				return nil, err
+			}
+			var oldID, newID string
+			for _, f := range facts {
+				if strings.Contains(f.Content, "Go") {
+					oldID = f.ID
+				}
+				if strings.Contains(f.Content, "Rust") {
+					newID = f.ID
+				}
+			}
+			if oldID == "" || newID == "" {
+				t.Fatalf("could not resolve fact ids for contradiction mock (old=%q new=%q)", oldID, newID)
+			}
+			body := fmt.Sprintf(`{"decisions":[{"new_fact_id":"%s","supersedes":[{"old_fact_id":"%s","should_supersede":true,"rationale":"stack change"}]}]}`, newID, oldID)
+			return &provider.Response{Content: body, ProviderName: "mock", Model: "c-test", TokensUsed: 12}, nil
+		}
+		if call == 1 {
+			return &provider.Response{Content: goFact, ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+		}
+		return &provider.Response{Content: rustFact, ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+	}}
+
+	eng := newTestEngineWithContradiction(t, store, sender, embedder, 0)
+	ctx := context.Background()
+
+	if _, err := eng.Ingest(ctx, "x", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	res, err := eng.Ingest(ctx, "y", "b.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if !res.ContradictionChecked {
+		t.Fatal("expected ContradictionChecked")
+	}
+	if res.FactsSuperseded != 1 {
+		t.Fatalf("FactsSuperseded = %d, want 1", res.FactsSuperseded)
+	}
+
+	facts, err := store.ListFacts(ctx, db.FactFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	var goF *model.Fact
+	for i := range facts {
+		if strings.Contains(facts[i].Content, "Go") {
+			goF = &facts[i]
+			break
+		}
+	}
+	if goF == nil {
+		t.Fatal("Go fact not found")
+	}
+	if goF.SupersededBy == "" {
+		t.Fatal("expected Go fact superseded")
+	}
+	if !strings.HasPrefix(goF.SupersedeReason, "contradiction:") {
+		t.Errorf("supersede_reason = %q", goF.SupersedeReason)
+	}
+
+	logs, err := store.ListExtractionLogs(ctx, 20)
+	if err != nil {
+		t.Fatalf("list logs: %v", err)
+	}
+	var sawContra bool
+	for _, l := range logs {
+		if l.ProviderName == "contradiction-check" && l.Success {
+			sawContra = true
+			break
+		}
+	}
+	if !sawContra {
+		t.Error("expected extraction_log row for contradiction-check")
+	}
+}
+
+func TestIngest_ContradictionConfidenceGuardBlocks(t *testing.T) {
+	vec := []float32{0.1, 0.3, 0.5, 0.7}
+	embedder := &mockEmbedder{vec: vec}
+	store := openStoreWithVec(t, 4)
+
+	highConf := `{
+  "facts": [
+    {"fact_type": "decision", "subject": "Stack", "content": "We use Go for the API.", "confidence": 0.95, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [],
+  "relationships": []
+}`
+	lowConf := `{
+  "facts": [
+    {"fact_type": "decision", "subject": "Stack", "content": "We use Rust for the API.", "confidence": 0.35, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [],
+  "relationships": []
+}`
+
+	var call int
+	sender := &cbSender{fn: func(ctx context.Context, req provider.Request) (*provider.Response, error) {
+		call++
+		if strings.Contains(req.SystemPrompt, "Contradiction review") {
+			facts, err := store.ListFacts(ctx, db.FactFilter{Limit: 20})
+			if err != nil {
+				return nil, err
+			}
+			var oldID, newID string
+			for _, f := range facts {
+				if strings.Contains(f.Content, "Go") {
+					oldID = f.ID
+				}
+				if strings.Contains(f.Content, "Rust") {
+					newID = f.ID
+				}
+			}
+			body := fmt.Sprintf(`{"decisions":[{"new_fact_id":"%s","supersedes":[{"old_fact_id":"%s","should_supersede":true,"rationale":"try"}]}]}`, newID, oldID)
+			return &provider.Response{Content: body, ProviderName: "mock", Model: "c-test", TokensUsed: 5}, nil
+		}
+		if call == 1 {
+			return &provider.Response{Content: highConf, ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+		}
+		return &provider.Response{Content: lowConf, ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+	}}
+
+	eng := newTestEngineWithContradiction(t, store, sender, embedder, 0)
+	ctx := context.Background()
+
+	if _, err := eng.Ingest(ctx, "x", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	res, err := eng.Ingest(ctx, "y", "b.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if res.FactsSuperseded != 0 {
+		t.Fatalf("expected confidence guard to block supersede, got FactsSuperseded=%d", res.FactsSuperseded)
+	}
+
+	facts, err := store.ListFacts(ctx, db.FactFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	for _, f := range facts {
+		if strings.Contains(f.Content, "Go") && f.SupersededBy != "" {
+			t.Errorf("Go fact should not be superseded by low-confidence new fact, got superseded_by=%q", f.SupersededBy)
+		}
 	}
 }

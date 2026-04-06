@@ -414,6 +414,9 @@ example = ""
 [quality]
 # Enable/disable quality signal collection (default: true)
 enabled = true
+# After ingest, batch LLM contradiction review against vector neighbors (default: true). Requires embeddings + provider chain.
+# contradiction_detection = true
+# contradiction_prompt_path = "prompts/contradiction-prompt.md"
 # Minimum new facts before running signal collection (default: 50)
 collection_threshold = 50
 # Warn if non-temporal fact type supersede rate exceeds this (default: 0.30)

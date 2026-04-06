@@ -527,6 +527,7 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `eval-history` | `[--type=extraction\|retrieval] [--limit=N]` | Show eval score history with deltas and baseline markers. Default limit: 10. |
 | `optimize` | -- | Run one prompt optimization cycle (Karpathy loop). After optimization, automatically runs both extraction and retrieval evals, persists results, and updates baselines. This is the primary way eval history accumulates. |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
+| `lint` | `[--format=table\|json] [--check=a,b,...]` | SQL-only knowledge base integrity checks (stale facts, orphans, broken supersede chains, entity dedup hints, missing embeddings, missing or unreadable source files when `[watcher].path` is set, consolidation coverage). No LLM. `--check` limits which checks run (comma-separated): `chains`, `stale`, `dedup`, `embeddings`, `orphans`, `sources`, `consolidation`. Exits with status **1** if any ERROR-severity finding is reported (e.g. broken supersede chains). |
 | `version` | -- | Print version and exit |
 
 The `--version` flag (before any command) also prints version and exits.
@@ -623,6 +624,11 @@ imprint optimize
 
 # Delete expired facts
 imprint gc
+
+# KB integrity (SQL diagnostics)
+imprint lint
+imprint lint --format=json
+imprint lint --check=stale,orphans,chains
 
 # Print version
 imprint version

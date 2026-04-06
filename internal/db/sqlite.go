@@ -389,6 +389,24 @@ func (s *SQLiteStore) SupersedeFact(ctx context.Context, oldID, newID string) er
 	return err
 }
 
+func (s *SQLiteStore) SupersedeFactByContradiction(ctx context.Context, oldID, newID string, reason string, validUntil time.Time) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE facts SET superseded_by = ?, supersede_reason = ?, valid_until = ?
+		WHERE id = ? AND (superseded_by IS NULL OR superseded_by = '')`,
+		newID, reason, timeStr(validUntil.UTC()), oldID)
+	if err != nil {
+		return fmt.Errorf("supersede fact by contradiction: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *SQLiteStore) UpdateFact(ctx context.Context, factID string, update FactUpdate) error {
 	var setClauses []string
 	var args []any
@@ -3244,4 +3262,191 @@ func (s *SQLiteStore) CoolPipelineStats(ctx context.Context) (*CoolStats, error)
 		return nil, fmt.Errorf("cool pipeline stats: %w", err)
 	}
 	return &stats, nil
+}
+
+// --- Lint (BVP-368) ---
+
+func (s *SQLiteStore) LintStaleFacts(ctx context.Context) ([]LintStaleFact, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, subject, content, valid_until
+		FROM facts
+		WHERE valid_until IS NOT NULL AND valid_until != ''
+		  AND valid_until < ?
+		  AND (superseded_by IS NULL OR superseded_by = '')`, now)
+	if err != nil {
+		return nil, fmt.Errorf("lint stale facts: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LintStaleFact
+	for rows.Next() {
+		var r LintStaleFact
+		var subj, content sql.NullString
+		if err := rows.Scan(&r.ID, &subj, &content, &r.ValidUntil); err != nil {
+			return nil, err
+		}
+		r.Subject = subj.String
+		r.Content = content.String
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) LintOrphanEntities(ctx context.Context) ([]LintOrphanEntity, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e.id, e.name, e.entity_type
+		FROM entities e
+		WHERE NOT EXISTS (
+			SELECT 1 FROM relationships r
+			WHERE r.from_entity = e.id OR r.to_entity = e.id
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM facts f WHERE f.subject = e.name
+		)`)
+	if err != nil {
+		return nil, fmt.Errorf("lint orphan entities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LintOrphanEntity
+	for rows.Next() {
+		var r LintOrphanEntity
+		if err := rows.Scan(&r.ID, &r.Name, &r.EntityType); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) LintBrokenSupersedeChains(ctx context.Context) ([]LintBrokenSupersedeChain, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.id, f.subject, f.superseded_by
+		FROM facts f
+		WHERE f.superseded_by IS NOT NULL AND f.superseded_by != ''
+		AND NOT EXISTS (
+			SELECT 1 FROM facts f2 WHERE f2.id = f.superseded_by
+		)`)
+	if err != nil {
+		return nil, fmt.Errorf("lint broken supersede chains: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LintBrokenSupersedeChain
+	for rows.Next() {
+		var r LintBrokenSupersedeChain
+		var subj sql.NullString
+		if err := rows.Scan(&r.ID, &subj, &r.SupersededBy); err != nil {
+			return nil, err
+		}
+		r.Subject = subj.String
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) LintEntityDedupExact(ctx context.Context) ([]LintEntityDedupPair, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e1.id, e1.name, e2.id, e2.name
+		FROM entities e1
+		JOIN entities e2 ON e1.id < e2.id
+		  AND LOWER(TRIM(e1.name)) = LOWER(TRIM(e2.name))`)
+	if err != nil {
+		return nil, fmt.Errorf("lint entity dedup exact: %w", err)
+	}
+	defer rows.Close()
+
+	return scanDedupPairs(rows, "exact")
+}
+
+func (s *SQLiteStore) LintEntityDedupSubstring(ctx context.Context) ([]LintEntityDedupPair, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT e1.id, e1.name, e2.id, e2.name
+		FROM entities e1
+		JOIN entities e2 ON e1.id < e2.id
+		  AND LENGTH(e1.name) >= 4
+		  AND LENGTH(e2.name) >= 4
+		  AND (
+			LOWER(e1.name) LIKE '%' || LOWER(e2.name) || '%'
+			OR LOWER(e2.name) LIKE '%' || LOWER(e1.name) || '%'
+		  )
+		  AND LOWER(TRIM(e1.name)) != LOWER(TRIM(e2.name))`)
+	if err != nil {
+		return nil, fmt.Errorf("lint entity dedup substring: %w", err)
+	}
+	defer rows.Close()
+
+	return scanDedupPairs(rows, "substring")
+}
+
+func scanDedupPairs(rows *sql.Rows, kind string) ([]LintEntityDedupPair, error) {
+	var out []LintEntityDedupPair
+	for rows.Next() {
+		var r LintEntityDedupPair
+		r.Kind = kind
+		if err := rows.Scan(&r.ID1, &r.Name1, &r.ID2, &r.Name2); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) LintFactsMissingEmbeddingsByType(ctx context.Context) ([]LintMissingEmbeddingByType, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT fact_type, COUNT(*) AS cnt
+		FROM facts
+		WHERE embedding IS NULL OR LENGTH(embedding) = 0
+		GROUP BY fact_type
+		ORDER BY cnt DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("lint missing embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LintMissingEmbeddingByType
+	for rows.Next() {
+		var r LintMissingEmbeddingByType
+		if err := rows.Scan(&r.FactType, &r.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) LintDistinctNonEmptySourceFiles(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT source_file FROM facts
+		WHERE source_file IS NOT NULL AND source_file != ''
+		ORDER BY source_file`)
+	if err != nil {
+		return nil, fmt.Errorf("lint source files: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLiteStore) LintUnconsolidatedActiveFactsCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM facts f
+		WHERE (f.superseded_by IS NULL OR f.superseded_by = '')
+		AND f.id NOT IN (
+			SELECT value FROM consolidations, json_each(consolidations.source_fact_ids)
+		)`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("lint unconsolidated facts: %w", err)
+	}
+	return n, nil
 }

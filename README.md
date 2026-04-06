@@ -239,6 +239,11 @@ echo "Alice decided to use Go for Acme." | ./imprint ingest
 
 # Delete expired facts
 ./imprint gc
+
+# SQL-only KB integrity checks (stale facts, orphans, supersede chains, dedup hints, embeddings, sources, consolidation)
+# Exits with status 1 if any ERROR-level finding (e.g. broken supersede chains).
+./imprint lint
+./imprint lint --format=json --check=stale,chains
 ```
 
 Use `--config` to specify a config file (default: `config.toml`, env: `IMPRINT_CONFIG`):

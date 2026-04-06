@@ -252,15 +252,17 @@ func (c *Config) EffectiveContextConfig() ContextConfig {
 }
 
 type QualityConfig struct {
-	Enabled              *bool   `toml:"enabled"`
-	CollectionThreshold  int     `toml:"collection_threshold"`
-	SupersedeRateWarning float64 `toml:"supersede_rate_warning"`
-	WindowDays           int     `toml:"window_days"`
-	DecayHalfLifeDays    int     `toml:"decay_half_life_days"`
-	OptimizedPromptPath  string  `toml:"optimized_prompt_path"`
-	MutationPromptPath   string  `toml:"mutation_prompt_path"`
-	GoldenDir            string  `toml:"golden_dir"`
-	OnKeptCommand        string  `toml:"on_kept_command"`
+	Enabled                 *bool   `toml:"enabled"`
+	CollectionThreshold     int     `toml:"collection_threshold"`
+	SupersedeRateWarning    float64 `toml:"supersede_rate_warning"`
+	WindowDays              int     `toml:"window_days"`
+	DecayHalfLifeDays       int     `toml:"decay_half_life_days"`
+	OptimizedPromptPath     string  `toml:"optimized_prompt_path"`
+	MutationPromptPath      string  `toml:"mutation_prompt_path"`
+	GoldenDir               string  `toml:"golden_dir"`
+	OnKeptCommand           string  `toml:"on_kept_command"`
+	ContradictionDetection  *bool   `toml:"contradiction_detection"`
+	ContradictionPromptPath string  `toml:"contradiction_prompt_path"`
 }
 
 func (c *Config) EffectiveQualityConfig() QualityConfig {
@@ -293,6 +295,17 @@ func (c *Config) EffectiveQualityConfig() QualityConfig {
 			q.OptimizedPromptPath = filepath.Join(filepath.Dir(c.Prompts.Extraction), "extraction-prompt-optimized.md")
 		} else {
 			q.OptimizedPromptPath = "prompts/extraction-prompt-optimized.md"
+		}
+	}
+	if q.ContradictionDetection == nil {
+		on := true
+		q.ContradictionDetection = &on
+	}
+	if q.ContradictionPromptPath == "" {
+		if c.Prompts.Extraction != "" {
+			q.ContradictionPromptPath = filepath.Join(filepath.Dir(c.Prompts.Extraction), "contradiction-prompt.md")
+		} else {
+			q.ContradictionPromptPath = "prompts/contradiction-prompt.md"
 		}
 	}
 	return q

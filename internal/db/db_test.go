@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -174,6 +175,48 @@ func TestListFacts_NotSuperseded(t *testing.T) {
 	}
 	if active[0].ID != newID {
 		t.Errorf("expected active fact to be new one")
+	}
+}
+
+func TestSupersedeFactByContradiction(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Hour)
+
+	oldID := NewID()
+	newID := NewID()
+	validUntil := now.Add(2 * time.Hour)
+
+	store.CreateFact(ctx, &model.Fact{
+		ID: oldID, Source: model.Source{TranscriptFile: "t.md"},
+		FactType: model.FactDecision, Subject: "Acme", Content: "Acme uses Python 3.9", CreatedAt: now,
+	})
+	store.CreateFact(ctx, &model.Fact{
+		ID: newID, Source: model.Source{TranscriptFile: "t.md"},
+		FactType: model.FactDecision, Subject: "Acme", Content: "Acme uses Python 3.12", CreatedAt: now.Add(time.Minute),
+	})
+	if err := store.SupersedeFactByContradiction(ctx, oldID, newID, "contradiction:version bump", validUntil); err != nil {
+		t.Fatalf("SupersedeFactByContradiction: %v", err)
+	}
+	got, err := store.GetFact(ctx, oldID)
+	if err != nil {
+		t.Fatalf("get old: %v", err)
+	}
+	if got.SupersededBy != newID {
+		t.Errorf("superseded_by = %q, want %q", got.SupersededBy, newID)
+	}
+	if !strings.HasPrefix(got.SupersedeReason, "contradiction:") {
+		t.Errorf("supersede_reason = %q, want contradiction prefix", got.SupersedeReason)
+	}
+	if got.Validity.ValidUntil == nil {
+		t.Fatal("expected valid_until set on superseded fact")
+	}
+	if !got.Validity.ValidUntil.UTC().Truncate(time.Second).Equal(validUntil.UTC().Truncate(time.Second)) {
+		t.Errorf("valid_until = %v, want %v", got.Validity.ValidUntil, validUntil)
+	}
+
+	if err := store.SupersedeFactByContradiction(ctx, oldID, newID, "contradiction:again", validUntil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second supersede: want ErrNotFound, got %v", err)
 	}
 }
 
