@@ -285,6 +285,30 @@ func TestGetEntityByName_CaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestUpdateEntityAliases(t *testing.T) {
+	store := openTestDB(t)
+	ctx := context.Background()
+	id := NewID()
+	e := &model.Entity{
+		ID: id, Name: "Go", EntityType: model.EntityTool,
+		Aliases:   []string{"Golang"},
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.CreateEntity(ctx, e); err != nil {
+		t.Fatalf("CreateEntity: %v", err)
+	}
+	if err := store.UpdateEntityAliases(ctx, id, []string{"Golang", "Go language"}); err != nil {
+		t.Fatalf("UpdateEntityAliases: %v", err)
+	}
+	got, err := store.GetEntity(ctx, id)
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	if len(got.Aliases) != 2 {
+		t.Fatalf("aliases = %v", got.Aliases)
+	}
+}
+
 func TestListEntities_FilterByType(t *testing.T) {
 	store := openTestDB(t)
 	ctx := context.Background()

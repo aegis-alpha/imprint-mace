@@ -263,6 +263,8 @@ type QualityConfig struct {
 	OnKeptCommand           string  `toml:"on_kept_command"`
 	ContradictionDetection  *bool   `toml:"contradiction_detection"`
 	ContradictionPromptPath string  `toml:"contradiction_prompt_path"`
+	MergeOnDedup            *bool   `toml:"merge_on_dedup"`
+	MergePromptPath         string  `toml:"merge_prompt_path"`
 }
 
 func (c *Config) EffectiveQualityConfig() QualityConfig {
@@ -306,6 +308,17 @@ func (c *Config) EffectiveQualityConfig() QualityConfig {
 			q.ContradictionPromptPath = filepath.Join(filepath.Dir(c.Prompts.Extraction), "contradiction-prompt.md")
 		} else {
 			q.ContradictionPromptPath = "prompts/contradiction-prompt.md"
+		}
+	}
+	if q.MergeOnDedup == nil {
+		off := false
+		q.MergeOnDedup = &off
+	}
+	if q.MergePromptPath == "" {
+		if c.Prompts.Extraction != "" {
+			q.MergePromptPath = filepath.Join(filepath.Dir(c.Prompts.Extraction), "merge-prompt.md")
+		} else {
+			q.MergePromptPath = "prompts/merge-prompt.md"
 		}
 	}
 	return q

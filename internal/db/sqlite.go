@@ -708,6 +708,25 @@ func (s *SQLiteStore) GetEntityByName(ctx context.Context, name string) (*model.
 	return e, err
 }
 
+func (s *SQLiteStore) UpdateEntityAliases(ctx context.Context, entityID string, aliases []string) error {
+	aliasJSON, err := json.Marshal(aliases)
+	if err != nil {
+		return fmt.Errorf("marshal aliases: %w", err)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE entities SET aliases = ? WHERE id = ?`, string(aliasJSON), entityID)
+	if err != nil {
+		return fmt.Errorf("update entity aliases: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *SQLiteStore) ListEntities(ctx context.Context, filter EntityFilter) ([]model.Entity, error) {
 	q := "SELECT id, name, entity_type, aliases, created_at FROM entities WHERE 1=1"
 	var args []any

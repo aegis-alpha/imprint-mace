@@ -31,6 +31,8 @@ type Store interface {
 	CreateEntity(ctx context.Context, e *model.Entity) error
 	GetEntity(ctx context.Context, id string) (*model.Entity, error)
 	GetEntityByName(ctx context.Context, name string) (*model.Entity, error)
+	// UpdateEntityAliases replaces the alias list for an entity (JSON array in DB).
+	UpdateEntityAliases(ctx context.Context, entityID string, aliases []string) error
 	ListEntities(ctx context.Context, filter EntityFilter) ([]model.Entity, error)
 
 	// Relationships

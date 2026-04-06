@@ -193,7 +193,7 @@ func skipIfUSearchBroken(t *testing.T) {
 	}
 }
 
-func testEngineWithDedup(t *testing.T, sender *mockSender, embedder provider.Embedder, dims int, threshold float64) (*Engine, *db.SQLiteStore) {
+func testEngineWithDedup(t *testing.T, sender extraction.Sender, embedder provider.Embedder, dims int, threshold float64, extra ...EngineOption) (*Engine, *db.SQLiteStore) {
 	t.Helper()
 	store, err := db.Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -218,8 +218,18 @@ func testEngineWithDedup(t *testing.T, sender *mockSender, embedder provider.Emb
 		t.Fatalf("create extractor: %v", err)
 	}
 
-	eng := New(ext, store, embedder, threshold, 0, slog.Default())
+	eng := New(ext, store, embedder, threshold, 0, slog.Default(), extra...)
 	return eng, store
+}
+
+func readRepoMergePrompt(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join("..", "..", "prompts", "merge-prompt.md")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read merge prompt %s: %v", path, err)
+	}
+	return string(b)
 }
 
 var singleFactJSON = `{
@@ -812,5 +822,232 @@ func TestIngest_ContradictionConfidenceGuardBlocks(t *testing.T) {
 		if strings.Contains(f.Content, "Go") && f.SupersededBy != "" {
 			t.Errorf("Go fact should not be superseded by low-confidence new fact, got superseded_by=%q", f.SupersededBy)
 		}
+	}
+}
+
+// longDedupCore yields word-set Jaccard > 0.9 when only the last token differs (Go vs Rust).
+const longDedupCore = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty"
+
+func longNearDupFactJSON(langToken string) string {
+	return fmt.Sprintf(`{
+  "facts": [
+    {"fact_type": "decision", "subject": "Stack", "content": "%s %s", "confidence": 0.9, "validity": {"valid_from": null, "valid_until": null}}
+  ],
+  "entities": [],
+  "relationships": []
+}`, longDedupCore, langToken)
+}
+
+func TestIngest_DedupMerge_SkipWhenClassifierSaysSkip(t *testing.T) {
+	vec := []float32{0.1, 0.2, 0.3, 0.4}
+	embedder := &mockEmbedder{vec: vec}
+	sender := &cbSender{fn: func(_ context.Context, req provider.Request) (*provider.Response, error) {
+		if strings.Contains(req.SystemPrompt, "similar knowledge-base facts") {
+			return &provider.Response{Content: `{"action":"skip","reason":"duplicate wording"}`, ProviderName: "mock", Model: "m", TokensUsed: 3}, nil
+		}
+		return &provider.Response{Content: singleFactJSON, ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+	}}
+	mergeTmpl := readRepoMergePrompt(t)
+	eng, store := testEngineWithDedup(t, sender, embedder, 4, 0.95, WithDedupMerge(true, sender, mergeTmpl))
+	ctx := context.Background()
+
+	if _, err := eng.Ingest(ctx, "Acme uses Go.", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	r2, err := eng.Ingest(ctx, "Acme uses Go.", "b.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if r2.FactsCount != 0 {
+		t.Errorf("expected 0 new facts (merge classifier skip), got %d", r2.FactsCount)
+	}
+	facts, _ := store.ListFacts(ctx, db.FactFilter{})
+	if len(facts) != 1 {
+		t.Errorf("expected 1 fact in DB, got %d", len(facts))
+	}
+}
+
+func TestIngest_DedupMerge_SupersedeStoresNewAndRetiresOld(t *testing.T) {
+	vec := []float32{0.1, 0.2, 0.3, 0.4}
+	embedder := &mockEmbedder{vec: vec}
+	var extractRound int
+	sender := &cbSender{fn: func(_ context.Context, req provider.Request) (*provider.Response, error) {
+		if strings.Contains(req.SystemPrompt, "similar knowledge-base facts") {
+			return &provider.Response{Content: `{"action":"supersede","reason":"language change"}`, ProviderName: "mock", Model: "m", TokensUsed: 3}, nil
+		}
+		extractRound++
+		if extractRound == 1 {
+			return &provider.Response{Content: longNearDupFactJSON("Go"), ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+		}
+		return &provider.Response{Content: longNearDupFactJSON("Rust"), ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+	}}
+	mergeTmpl := readRepoMergePrompt(t)
+	eng, store := testEngineWithDedup(t, sender, embedder, 4, 0.95, WithDedupMerge(true, sender, mergeTmpl))
+	ctx := context.Background()
+
+	if _, err := eng.Ingest(ctx, "x", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	res, err := eng.Ingest(ctx, "y", "b.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if res.FactsCount != 1 {
+		t.Fatalf("expected 1 new fact, got %d", res.FactsCount)
+	}
+	if res.FactsSuperseded != 1 {
+		t.Fatalf("FactsSuperseded = %d, want 1", res.FactsSuperseded)
+	}
+	facts, err := store.ListFacts(ctx, db.FactFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	var goFact *model.Fact
+	var rustFact *model.Fact
+	for i := range facts {
+		if strings.Contains(facts[i].Content, "Rust") {
+			rustFact = &facts[i]
+			continue
+		}
+		if strings.Contains(facts[i].Content, "twenty Go") {
+			goFact = &facts[i]
+		}
+	}
+	if goFact == nil || rustFact == nil {
+		t.Fatalf("missing fact: go=%v rust=%v", goFact != nil, rustFact != nil)
+	}
+	if goFact.SupersededBy != rustFact.ID {
+		t.Errorf("old fact superseded_by = %q, want %q", goFact.SupersededBy, rustFact.ID)
+	}
+	if !strings.HasPrefix(goFact.SupersedeReason, "dedup:supersede:") {
+		t.Errorf("supersede_reason = %q", goFact.SupersedeReason)
+	}
+}
+
+func TestIngest_DedupMerge_MergeStoresMergedContent(t *testing.T) {
+	vec := []float32{0.1, 0.2, 0.3, 0.4}
+	embedder := &mockEmbedder{vec: vec}
+	var extractRound int
+	sender := &cbSender{fn: func(_ context.Context, req provider.Request) (*provider.Response, error) {
+		if strings.Contains(req.SystemPrompt, "similar knowledge-base facts") {
+			return &provider.Response{Content: `{"action":"merge","reason":"combine skills","merged_content":"Stack uses Go and Rust for the API."}`, ProviderName: "mock", Model: "m", TokensUsed: 8}, nil
+		}
+		extractRound++
+		if extractRound == 1 {
+			return &provider.Response{Content: longNearDupFactJSON("Go"), ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+		}
+		return &provider.Response{Content: longNearDupFactJSON("Rust"), ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+	}}
+	mergeTmpl := readRepoMergePrompt(t)
+	eng, store := testEngineWithDedup(t, sender, embedder, 4, 0.95, WithDedupMerge(true, sender, mergeTmpl))
+	ctx := context.Background()
+
+	if _, err := eng.Ingest(ctx, "x", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	res, err := eng.Ingest(ctx, "y", "b.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if res.FactsCount != 1 {
+		t.Fatalf("expected 1 new fact (merged), got %d", res.FactsCount)
+	}
+	if res.FactsSuperseded != 1 {
+		t.Fatalf("FactsSuperseded = %d, want 1", res.FactsSuperseded)
+	}
+	facts, err := store.ListFacts(ctx, db.FactFilter{Limit: 20})
+	if err != nil {
+		t.Fatalf("list facts: %v", err)
+	}
+	var merged *model.Fact
+	var oldGo *model.Fact
+	for i := range facts {
+		if strings.Contains(facts[i].Content, "Go and Rust for the API") {
+			merged = &facts[i]
+		}
+		if strings.Contains(facts[i].Content, "twenty Go") {
+			oldGo = &facts[i]
+		}
+	}
+	if merged == nil {
+		t.Fatal("merged fact not found")
+	}
+	if oldGo == nil || oldGo.SupersededBy != merged.ID {
+		t.Fatalf("expected old Go fact superseded by merged id, old=%v", oldGo)
+	}
+	if merged.FactType != oldGo.FactType || merged.Subject != oldGo.Subject {
+		t.Errorf("merged type/subject want %s/%q got %s/%q", oldGo.FactType, oldGo.Subject, merged.FactType, merged.Subject)
+	}
+}
+
+func TestIngest_DedupMerge_ClassifierErrorFallsBackToSkip(t *testing.T) {
+	vec := []float32{0.1, 0.2, 0.3, 0.4}
+	embedder := &mockEmbedder{vec: vec}
+	sender := &cbSender{fn: func(_ context.Context, req provider.Request) (*provider.Response, error) {
+		if strings.Contains(req.SystemPrompt, "similar knowledge-base facts") {
+			return nil, fmt.Errorf("merge provider down")
+		}
+		return &provider.Response{Content: singleFactJSON, ProviderName: "mock", Model: "test", TokensUsed: 50}, nil
+	}}
+	mergeTmpl := readRepoMergePrompt(t)
+	eng, store := testEngineWithDedup(t, sender, embedder, 4, 0.95, WithDedupMerge(true, sender, mergeTmpl))
+	ctx := context.Background()
+
+	if _, err := eng.Ingest(ctx, "Acme uses Go.", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	r2, err := eng.Ingest(ctx, "Acme uses Go.", "b.md")
+	if err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	if r2.FactsCount != 0 {
+		t.Errorf("expected fallback skip (0 new facts), got %d", r2.FactsCount)
+	}
+	facts, _ := store.ListFacts(ctx, db.FactFilter{})
+	if len(facts) != 1 {
+		t.Errorf("expected 1 fact total, got %d", len(facts))
+	}
+}
+
+func TestIngest_EntityAliasMergeOnCollision(t *testing.T) {
+	go1 := `{
+  "facts": [],
+  "entities": [
+    {"name": "Go", "entity_type": "tool", "aliases": ["Golang"]}
+  ],
+  "relationships": []
+}`
+	go2 := `{
+  "facts": [],
+  "entities": [
+    {"name": "Go", "entity_type": "tool", "aliases": ["Go language"]}
+  ],
+  "relationships": []
+}`
+	sender := &mockSender{}
+	eng, store := testEngine(t, sender)
+	ctx := context.Background()
+
+	sender.response = &provider.Response{Content: go1, ProviderName: "mock", Model: "test", TokensUsed: 10}
+	if _, err := eng.Ingest(ctx, "x", "a.md"); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+	sender.response = &provider.Response{Content: go2, ProviderName: "mock", Model: "test", TokensUsed: 10}
+	if _, err := eng.Ingest(ctx, "y", "b.md"); err != nil {
+		t.Fatalf("second ingest: %v", err)
+	}
+	e, err := store.GetEntityByName(ctx, "Go")
+	if err != nil {
+		t.Fatalf("GetEntityByName: %v", err)
+	}
+	if len(e.Aliases) != 2 {
+		t.Fatalf("aliases = %v, want 2 entries", e.Aliases)
+	}
+	have := map[string]bool{}
+	for _, a := range e.Aliases {
+		have[a] = true
+	}
+	if !have["Golang"] || !have["Go language"] {
+		t.Errorf("expected Golang and Go language in %v", e.Aliases)
 	}
 }

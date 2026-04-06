@@ -417,6 +417,9 @@ enabled = true
 # After ingest, batch LLM contradiction review against vector neighbors (default: true). Requires embeddings + provider chain.
 # contradiction_detection = true
 # contradiction_prompt_path = "prompts/contradiction-prompt.md"
+# When smart dedup would skip a fact, optional LLM skip/supersede/merge (default: false). Same extraction provider chain; Prism task X-Prism-Task: merge.
+# merge_on_dedup = false
+# merge_prompt_path = "prompts/merge-prompt.md"
 # Minimum new facts before running signal collection (default: 50)
 collection_threshold = 50
 # Warn if non-temporal fact type supersede rate exceeds this (default: 0.30)

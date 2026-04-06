@@ -41,6 +41,9 @@ type Engine struct {
 	contraEnabled  bool
 	contraSender   extraction.Sender
 	contraPrompt   string
+	mergeOnDedup   bool
+	mergeSender    extraction.Sender
+	mergePrompt    string // full merge-prompt.md body (Go template for user message)
 }
 
 // EngineOption configures Engine beyond the constructor parameters.
@@ -52,6 +55,16 @@ func WithContradiction(enabled bool, sender extraction.Sender, systemPrompt stri
 		e.contraEnabled = enabled
 		e.contraSender = sender
 		e.contraPrompt = strings.TrimSpace(systemPrompt)
+	}
+}
+
+// WithDedupMerge enables LLM classification (skip/supersede/merge) for near-duplicate
+// facts detected by smart dedup. mergePromptTemplate is the full prompt template text.
+func WithDedupMerge(enabled bool, sender extraction.Sender, mergePromptTemplate string) EngineOption {
+	return func(e *Engine) {
+		e.mergeOnDedup = enabled
+		e.mergeSender = sender
+		e.mergePrompt = strings.TrimSpace(mergePromptTemplate)
 	}
 }
 
@@ -152,6 +165,19 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 			nameToID[name] = existing.ID
 			result.EntityIDs = append(result.EntityIDs, existing.ID)
 			result.EntityCollisions++
+			mergedAliases := mergeEntityAliasLists(existing.Aliases, extracted.Entities[i].Aliases)
+			if len(mergedAliases) > len(existing.Aliases) {
+				if uerr := e.store.UpdateEntityAliases(ctx, existing.ID, mergedAliases); uerr != nil {
+					e.logger.Warn("failed to merge entity aliases",
+						"name", name, "error", uerr)
+				}
+			}
+			if extracted.Entities[i].EntityType != existing.EntityType {
+				e.logger.Warn("entity type conflict on ingest",
+					"name", name,
+					"existing_type", existing.EntityType,
+					"incoming_type", extracted.Entities[i].EntityType)
+			}
 			continue
 		}
 		if err := e.store.CreateEntity(ctx, &extracted.Entities[i]); err != nil {
@@ -185,17 +211,89 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 			}
 		}
 
+		skipAsDuplicate := false
+		var pendingDedupSupersedeOldID string
+		var pendingDedupReason string
+
 		if vec != nil && e.dedupThreshold > 0 {
-			similar, err := e.store.SearchByVector(ctx, vec, 1)
-			if err == nil && len(similar) > 0 && similar[0].Score > e.dedupThreshold {
-				if jaccardWords(extracted.Facts[i].Content, similar[0].Fact.Content) >= dedupContentJaccardMin {
-					e.logger.Info("dedup: skipping similar fact",
-						"new_content", extracted.Facts[i].Content,
-						"similar_to", similar[0].Fact.ID,
-						"similarity", similar[0].Score)
-					continue
+			similar, serr := e.store.SearchByVector(ctx, vec, 1)
+			if serr != nil {
+				e.logger.Warn("dedup: vector search failed", "error", serr)
+			} else if len(similar) > 0 && similar[0].Score > e.dedupThreshold {
+				oldF := similar[0].Fact
+				if isActiveFactForDedup(oldF) && jaccardWords(extracted.Facts[i].Content, oldF.Content) >= dedupContentJaccardMin {
+					if e.mergeOnDedup && e.mergeSender != nil && e.mergePrompt != "" {
+						dec, _, _, _, derr := runDedupMergeClassify(ctx, e.mergeSender, mergeLLMSystemPrompt, e.mergePrompt, oldF, extracted.Facts[i])
+						if derr != nil {
+							e.logger.Warn("dedup merge classify failed, falling back to skip", "error", derr)
+							skipAsDuplicate = true
+						} else {
+							switch dec.Action {
+							case "skip":
+								skipAsDuplicate = true
+							case "supersede":
+								pendingDedupSupersedeOldID = oldF.ID
+								pendingDedupReason = dec.Reason
+							case "merge":
+								merged := mergedFactFromLLM(oldF, extracted.Facts[i], dec.MergedContent)
+								if !confidenceAllowsSupersede(merged, oldF) {
+									e.logger.Info("dedup merge: blocked by confidence guard, skipping new fact")
+									skipAsDuplicate = true
+									break
+								}
+								mvec, mErr := e.embedder.Embed(ctx, merged.Content)
+								if mErr != nil {
+									e.logger.Warn("dedup merge: embed failed", "error", mErr)
+									skipAsDuplicate = true
+									break
+								}
+								if err := e.store.CreateFact(ctx, &merged); err != nil {
+									e.logger.Warn("dedup merge: create fact failed", "error", err)
+									skipAsDuplicate = true
+									break
+								}
+								result.FactIDs = append(result.FactIDs, merged.ID)
+								batchFactIDs[merged.ID] = struct{}{}
+								if err := e.store.UpdateFactEmbedding(ctx, merged.ID, mvec, e.embedder.ModelName()); err != nil {
+									e.logger.Warn("dedup merge: store embedding failed", "error", err)
+								}
+								if err := e.store.SupersedeFactByContradiction(ctx, oldF.ID, merged.ID, formatDedupReason("merge", dec.Reason), merged.CreatedAt); err != nil {
+									if !errors.Is(err, db.ErrNotFound) {
+										e.logger.Warn("dedup merge: supersede failed", "error", err)
+									}
+								} else {
+									result.FactsSuperseded++
+								}
+								var mcands []contradictionCandidate
+								if e.contraEnabled && e.contraSender != nil && e.contraPrompt != "" {
+									hits, cerr := e.store.SearchByVector(ctx, mvec, 5)
+									if cerr != nil {
+										e.logger.Warn("contradiction: vector search failed", "error", cerr)
+									} else {
+										mcands = filterContradictionCandidates(hits, merged.Subject, batchFactIDs)
+									}
+								}
+								if len(mcands) > 0 {
+									contraGroups = append(contraGroups, contradictionGroup{NewFact: merged, Candidates: mcands})
+								}
+								skipAsDuplicate = true
+							default:
+								skipAsDuplicate = true
+							}
+						}
+					} else {
+						e.logger.Info("dedup: skipping similar fact",
+							"new_content", extracted.Facts[i].Content,
+							"similar_to", similar[0].Fact.ID,
+							"similarity", similar[0].Score)
+						skipAsDuplicate = true
+					}
 				}
 			}
+		}
+
+		if skipAsDuplicate {
+			continue
 		}
 
 		var candidates []contradictionCandidate
@@ -220,6 +318,23 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 			if err := e.store.UpdateFactEmbedding(ctx, extracted.Facts[i].ID, vec, e.embedder.ModelName()); err != nil {
 				e.logger.Warn("failed to store embedding",
 					"fact_id", extracted.Facts[i].ID, "error", err)
+			}
+		}
+
+		if pendingDedupSupersedeOldID != "" {
+			newF, errN := e.store.GetFact(ctx, extracted.Facts[i].ID)
+			oldF2, errO := e.store.GetFact(ctx, pendingDedupSupersedeOldID)
+			if errN != nil || errO != nil || newF == nil || oldF2 == nil {
+				e.logger.Warn("dedup supersede: missing fact for apply",
+					"new_id", extracted.Facts[i].ID, "old_id", pendingDedupSupersedeOldID)
+			} else if !confidenceAllowsSupersede(*newF, *oldF2) {
+				e.logger.Info("dedup supersede: blocked by confidence guard")
+			} else if err := e.store.SupersedeFactByContradiction(ctx, pendingDedupSupersedeOldID, extracted.Facts[i].ID, formatDedupReason("supersede", pendingDedupReason), newF.CreatedAt); err != nil {
+				if !errors.Is(err, db.ErrNotFound) {
+					e.logger.Warn("dedup supersede: failed", "old_id", pendingDedupSupersedeOldID, "error", err)
+				}
+			} else {
+				result.FactsSuperseded++
 			}
 		}
 
@@ -263,7 +378,7 @@ func (e *Engine) Ingest(ctx context.Context, text, sourceFile string, opts ...In
 				}
 				applied++
 			}
-			result.FactsSuperseded = applied
+			result.FactsSuperseded += applied
 			e.writeContradictionLog(ctx, true, modelName, len(contraGroups), applied, len(decisions), tokens, durationMs, "", "")
 		}
 	}
@@ -320,4 +435,30 @@ func (e *Engine) writeContradictionLog(ctx context.Context, success bool, modelN
 	if err := e.store.CreateExtractionLog(ctx, l); err != nil {
 		e.logger.Warn("failed to write contradiction extraction log", "error", err)
 	}
+}
+
+// mergeEntityAliasLists returns existing aliases plus incoming aliases not yet present (case-insensitive).
+func mergeEntityAliasLists(existing, incoming []string) []string {
+	have := make(map[string]struct{}, len(existing)+len(incoming))
+	out := make([]string, 0, len(existing)+len(incoming))
+	for _, a := range existing {
+		k := strings.ToLower(strings.TrimSpace(a))
+		if k == "" {
+			continue
+		}
+		have[k] = struct{}{}
+		out = append(out, strings.TrimSpace(a))
+	}
+	for _, a := range incoming {
+		k := strings.ToLower(strings.TrimSpace(a))
+		if k == "" {
+			continue
+		}
+		if _, ok := have[k]; ok {
+			continue
+		}
+		have[k] = struct{}{}
+		out = append(out, strings.TrimSpace(a))
+	}
+	return out
 }

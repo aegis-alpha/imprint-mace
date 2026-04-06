@@ -307,6 +307,13 @@ func contradictionProviderConfigs(cfg *config.Config) []model.ProviderConfig {
 	return cfg.Providers.Extraction
 }
 
+func mergeProviderConfigs(cfg *config.Config) []model.ProviderConfig {
+	if prismModeEnabled(cfg) {
+		return []model.ProviderConfig{prismProviderConfig(cfg, "merge")}
+	}
+	return cfg.Providers.Extraction
+}
+
 func providerConfigsForTask(cfg *config.Config, task string) []model.ProviderConfig {
 	if prismModeEnabled(cfg) {
 		return []model.ProviderConfig{prismProviderConfig(cfg, task)}
@@ -407,6 +414,22 @@ func createEngine(logger *slog.Logger, cfg *config.Config, store db.Store) *impr
 			} else {
 				imprintOpts = append(imprintOpts, imprint.WithContradiction(true, cChain, string(rawPrompt)))
 				logger.Info("contradiction detection enabled", "prompt", contraPath)
+			}
+		}
+	}
+
+	if qeff.MergeOnDedup != nil && *qeff.MergeOnDedup {
+		mergePath := qeff.MergePromptPath
+		rawMerge, err := os.ReadFile(mergePath) //nolint:gosec // path from config
+		if err != nil {
+			logger.Warn("merge prompt unreadable; merge-on-dedup disabled", "path", mergePath, "error", err)
+		} else {
+			mChain, err := provider.NewChain(mergeProviderConfigs(cfg))
+			if err != nil {
+				logger.Warn("merge provider chain unavailable; merge-on-dedup disabled", "error", err)
+			} else {
+				imprintOpts = append(imprintOpts, imprint.WithDedupMerge(true, mChain, string(rawMerge)))
+				logger.Info("dedup merge classification enabled", "prompt", mergePath)
 			}
 		}
 	}
