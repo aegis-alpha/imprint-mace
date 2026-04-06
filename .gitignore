@@ -10,6 +10,7 @@ config.toml
 *.db-journal
 *.db-wal
 *.db-shm
+*.vecindex
 
 # Go
 vendor/

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-06
+
 ### Added
 
 - **BVP-320:** optional **LLM dedup merge** on `Engine.Ingest()`: when smart dedup would skip, classify skip / supersede / merge (`prompts/merge-prompt.md` template). Supersede and merge retire the similar fact via `SupersedeFactByContradiction` with `dedup:supersede:` / `dedup:merge:` reason prefixes (same `valid_until` behavior as BVP-316). Merge stores LLM-combined content only; the raw extracted near-duplicate is discarded. Entity name collisions now union aliases. Config: `[quality] merge_on_dedup` (default off), `merge_prompt_path`; Prism task `X-Prism-Task: merge`. Store: `UpdateEntityAliases`.
@@ -15,13 +17,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Changed
 
 - `imprint lint`: exit status 1 when any ERROR-level check has findings; `sources` also reports paths that exist but cannot be `stat`d (e.g. permission errors); stale-facts action text clarifies `gc_after_days` vs immediate `valid_until` expiry.
-- Reranker is now provider-agnostic and always enabled in query flow: default local cosine reranking (zero-config, no API call) with optional HTTP provider rerank via `[[providers.reranker]]`. Generic client targets `/v1/rerank` with Cohere `/v2/rerank` compatibility. Cohere-specific client removed.
-- Added Prism mode via `[llm].base_url`: single-endpoint routing for extraction/query/consolidation/embedding/rerank with task headers (`X-Prism-Task`, `X-Prism-App`), direct `[[providers.*]]` chains ignored while active, and provider health checks skipped in this mode.
 
 ## [0.6.1] - 2026-04-05
 
+### Added
+
+- Prism mode via `[llm].base_url`: single-endpoint routing for extraction, query, consolidation, embedding, and rerank calls through one OpenAI-compatible endpoint, with task headers (`X-Prism-Task`, `X-Prism-App`) for upstream routing.
+
+### Changed
+
+- Reranker is now provider-agnostic and always enabled in query flow: default local cosine reranking (zero-config, no API call) with optional HTTP provider rerank via `[[providers.reranker]]`. Generic client targets `/v1/rerank` with Cohere `/v2/rerank` compatibility. Cohere-specific client removed.
+
 ### Fixed
 
+- `eval-retrieval`: nil reranker config now safely falls back instead of panicking when no reranker provider is configured.
 - USearch SIGSEGV on AMD EPYC-Rome (Gitea #1): replaced pre-built USearch `.deb` package with CMake source build in Dockerfile, CI, and release workflows. The pre-built binary used SIMD instructions (likely AVX-512) unsupported by EPYC-Rome. Source build compiles with the CPU features available on the build machine, producing a compatible binary on any architecture.
 - Dockerfile: new multi-stage `usearch-builder` stage builds USearch v2.24.0 from source. Builder and runtime stages COPY only the artifacts (`libusearch_c.so`, `usearch.h`). Eliminates `.deb` download and `dpkg` from both stages.
 - CI (`ci.yml`): all three jobs (test, security, integration) now build USearch from source instead of installing `.deb`. Added missing explicit `CGO_CFLAGS`/`CGO_LDFLAGS` env vars to `govulncheck` and integration test steps (previously set via `GITHUB_ENV` which was removed with the `.deb` step).
@@ -230,6 +239,8 @@ Initial release.
 - CI: GitHub Actions (test on Ubuntu + macOS, Docker build on main, goreleaser on tag)
 - 232+ tests
 
+[0.7.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.7.0
+[0.6.1]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.6.1
 [0.6.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.6.0
 [0.5.1]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.5.1
 [0.5.0]: https://github.com/aegis-alpha/imprint-MACE/releases/tag/v0.5.0

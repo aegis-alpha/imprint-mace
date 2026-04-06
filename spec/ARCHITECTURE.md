@@ -150,6 +150,8 @@ Message arrives (from hook/API)
 - The `embedding_model` column on the fact records which model produced the vector. This enables selective re-embedding when switching providers.
 - Embedder types: OpenAI-compatible (covers OpenAI, Google, Voyage AI, etc.) and Ollama.
 
+**Recommended production embedder:** EmbeddingGemma 300M (Google, 768d) served via llama-server. Benchmark on 4,390 real transcript chunks / 50 questions showed Recall@10 = 0.600, MRR = 0.586 -- within 4% of text-embedding-3-small (0.640 / 0.610) at zero cost. Matryoshka truncation to 512 dims produces no measurable quality loss. Backend latency via llama-server: p50 = 7.2ms per query (vs 65ms via Ollama -- 9x overhead from Ollama runtime, not model). This is a recommendation, not a requirement -- Imprint works with any OpenAI-compatible embedder.
+
 **USearch vector index (D36, BVP-365):** Single `.vecindex` sidecar file next to the SQLite database. All vector tables (facts, chunks, hot messages, cooldown messages) share one HNSW index. Keys are prefixed to avoid collisions: `fact:<ulid>`, `chunk:<ulid>`, `hot:<ulid>`, `cool:<ulid>`. The uint64 key in USearch is FNV-64 hash of the prefixed string key. SQLite embedding BLOB columns are the source of truth; the cache file is expendable and rebuildable. Load time: ~75ms for 200K vectors. Search time: ~1.1ms at 200K scale (247x faster than sqlite-vec brute-force).
 
 ---
