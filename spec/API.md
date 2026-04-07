@@ -12,6 +12,11 @@ All responses are JSON with `Content-Type: application/json`. Errors return `{"e
 
 If `[llm].base_url` is configured, Imprint runs in Prism mode: all chat/embedding/rerank backend calls route to one endpoint with task headers (`X-Prism-Task`, `X-Prism-App`) and direct `[[providers.*]]` chains are ignored.
 
+Vector backend mode is configured via `[vector].mode`:
+- `read-write` (default): processes that require vector writes must pass a startup write-path self-test.
+- `read-only`: explicit operator choice; vector search stays available, vector writes are rejected centrally.
+- `disabled`: no vector backend is attached.
+
 ### POST /ingest
 
 Behavior depends on config `[hot].enabled` and optional request field `mode`.
@@ -113,7 +118,7 @@ Database statistics, wrapped with version info.
 
 ```json
 {
-  "version": "0.5.0",
+  "version": "v0.7.1-dev+abc1234",
   "stats": {
     "facts": 142,
     "entities": 38,
@@ -122,6 +127,15 @@ Database statistics, wrapped with version info.
     "ingested_files": 12,
     "hot_messages": 23,
     "cooldown_messages": 156
+  },
+  "vector_backend": {
+    "backend": "usearch",
+    "mode": "read-write",
+    "status": "healthy",
+    "read_available": true,
+    "write_safe": true,
+    "last_self_test": "fresh_add_repeated_add_save_load_search",
+    "detail": "USearch fresh-index write path passed first add, repeated add, save/load, and search checks"
   },
   "quality_signals": [
     {
@@ -135,11 +149,10 @@ Database statistics, wrapped with version info.
   "query_stats": {
     "total_queries": 84,
     "total_context": 210,
-    "avg_latency_ms": 1250,
-    "avg_retrieval_ms": 180,
-    "avg_synthesis_ms": 1070,
-    "avg_facts_found": 8,
-    "embedder_available_pct": 100
+    "avg_query_latency": 1250,
+    "avg_context_latency": 180,
+    "error_count": 2,
+    "embedder_avail_pct": 100
   },
   "eval_scores": {
     "extraction": {"score": 0.72, "examples": 38, "date": "2026-03-20T09:00:00Z"},
@@ -176,6 +189,7 @@ Optional fields (omitted when empty):
 
 | Field | Type | Present when |
 |-------|------|-------------|
+| `vector_backend` | object | Always for `SQLiteStore`-backed status responses. Fields: `backend`, `mode`, `status`, `read_available`, `write_safe`, `last_self_test` (if one ran), `detail`. |
 | `quality_signals` | array | Quality signals have been collected (deduplicated: latest per signal_type + category) |
 | `query_stats` | object | At least one query or context request in the last 30 days |
 | `eval_scores` | object | At least one eval run recorded. `extraction`: composite score. `retrieval`: score = Recall@10, score2 = MRR. |
@@ -523,7 +537,7 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `export` | `[--format=json\|csv] [--output=path]` | Export entire knowledge base |
 | `eval` | `--golden=PATH [--format=json\|table] [--save-baseline] [--check] [--threshold=N]` | Evaluate extraction quality against a golden dataset. Baseline is managed automatically: first run becomes baseline, subsequent runs update it on improvement. `--save-baseline` forces a manual override. `--check` compares with baseline and exits non-zero on regression. Default threshold: 0.05. |
 | `eval generate` | `[--output=PATH]` | Generate built-in golden eval dataset (default: `testdata/golden/`) |
-| `eval-retrieval` | `[--format=json\|table] [--no-embedder] [--merge-strategy=rrf\|set-union] [--save-baseline] [--check] [--threshold=N]` | Evaluate retrieval quality (Recall@10, MRR). `--no-embedder` runs text+graph only. `--merge-strategy` selects RRF (default) or set-union dense-first ordering. Same auto-baseline behavior as `eval`. |
+| `eval-retrieval` | `[--format=json\|table] [--no-embedder] [--merge-strategy=rrf\|set-union] [--save-baseline] [--check] [--threshold=N]` | Evaluate retrieval quality (Recall@10, MRR) against the built-in corpus. `--no-embedder` runs text+graph only. When embeddings are enabled, eval uses a pure-Go exact vector backend rather than production USearch, so harness quality stays deterministic and portable. `--merge-strategy` selects RRF (default) or set-union dense-first ordering. Baselines and history are tracked under `retrieval`. |
 | `eval-history` | `[--type=extraction\|retrieval] [--limit=N]` | Show eval score history with deltas and baseline markers. Default limit: 10. |
 | `optimize` | -- | Run one prompt optimization cycle (Karpathy loop). After optimization, automatically runs both extraction and retrieval evals, persists results, and updates baselines. This is the primary way eval history accumulates. |
 | `gc` | -- | Delete expired facts (valid_until < now - gc_after_days) |
@@ -531,6 +545,10 @@ Global flag: `--config` sets the config file path. Default: `config.toml`. Envir
 | `version` | -- | Print version and exit |
 
 The `--version` flag (before any command) also prints version and exits.
+
+Version strings use one of two forms:
+- release build: `vX.Y.Z`
+- identifiable dev build: `vX.Y.Z-dev+<shortsha>` when stamped at build time, or `dev+<shortsha>` when only Go VCS build metadata is available
 
 **Service discovery:** The `serve` command writes its actual listen address to `~/.imprint/serve.json` on startup. If the configured port is busy, it tries the next available port (up to +20). Set `IMPRINT_ADVERTISE_URL` to override the URL written to `serve.json` (useful when behind a proxy or on a remote server).
 
@@ -595,7 +613,7 @@ imprint eval --golden=testdata/golden/ --check
 # Build context snapshot (no LLM, for system prompt injection)
 imprint context "current project topic"
 
-# Evaluate retrieval quality (seeds temp DB, runs 21 golden questions)
+# Evaluate retrieval quality against the built-in corpus
 imprint eval-retrieval
 
 # Evaluate retrieval without embedder (graceful degradation)

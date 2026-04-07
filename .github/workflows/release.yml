@@ -56,4 +56,6 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           push: true
+          build-args: |
+            IMPRINT_VERSION=${{ github.ref_name }}
           tags: ghcr.io/aegis-alpha/imprint-mace:${{ github.ref_name }},ghcr.io/aegis-alpha/imprint-mace:latest

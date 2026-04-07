@@ -724,6 +724,45 @@ tick_seconds = -1
 	}
 }
 
+func TestEffectiveVectorConfig_DefaultsToReadWrite(t *testing.T) {
+	cfg := &Config{}
+	if got := cfg.EffectiveVectorConfig().Mode; got != "read-write" {
+		t.Fatalf("expected default vector mode read-write, got %q", got)
+	}
+}
+
+func TestEffectiveVectorConfig_NormalizesMode(t *testing.T) {
+	cfg := &Config{Vector: VectorConfig{Mode: " Read-Only "}}
+	if got := cfg.EffectiveVectorConfig().Mode; got != "read-only" {
+		t.Fatalf("expected normalized vector mode read-only, got %q", got)
+	}
+}
+
+func TestLoad_InvalidVectorModeRejected(t *testing.T) {
+	content := `
+[db]
+path = "test.db"
+
+[[providers.extraction]]
+name = "openai"
+base_url = "https://api.openai.com/v1"
+model = "gpt"
+api_key_env = "KEY"
+timeout_seconds = 30
+priority = 1
+
+[vector]
+mode = "banana"
+`
+	_, err := loadStringConfig(t, content)
+	if err == nil {
+		t.Fatal("expected invalid vector.mode error")
+	}
+	if !strings.Contains(err.Error(), "vector.mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // --- helpers ---
 
 func loadFromString(t *testing.T, content string) *Config {

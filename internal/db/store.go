@@ -12,6 +12,12 @@ import (
 // ErrNotFound is returned when a requested record does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrVectorWriteUnsafe is returned when the configured vector backend is not safe for writes.
+var ErrVectorWriteUnsafe = errors.New("vector backend write path is unsafe")
+
+// ErrVectorReadUnavailable is returned when vector search is disabled or unavailable.
+var ErrVectorReadUnavailable = errors.New("vector backend read path is unavailable")
+
 // Store is the persistence interface for all OpenClaw-Memory data.
 // Each method operates on a single record or a filtered list.
 type Store interface {
@@ -191,13 +197,13 @@ type Store interface {
 }
 
 type DBStats struct {
-	Facts            int
-	Entities         int
-	Relationships    int
-	Consolidations   int
-	IngestedFiles    int
-	HotMessages      int
-	CooldownMessages int
+	Facts            int `json:"facts"`
+	Entities         int `json:"entities"`
+	Relationships    int `json:"relationships"`
+	Consolidations   int `json:"consolidations"`
+	IngestedFiles    int `json:"ingested_files"`
+	HotMessages      int `json:"hot_messages"`
+	CooldownMessages int `json:"cooldown_messages"`
 }
 
 type ScoredFact struct {
@@ -348,12 +354,12 @@ type QueryLog struct {
 }
 
 type QueryLogStatsResult struct {
-	TotalQueries      int
-	TotalContext      int
-	AvgQueryLatency   float64
-	AvgContextLatency float64
-	ErrorCount        int
-	EmbedderAvailPct  float64
+	TotalQueries      int     `json:"total_queries"`
+	TotalContext      int     `json:"total_context"`
+	AvgQueryLatency   float64 `json:"avg_query_latency"`
+	AvgContextLatency float64 `json:"avg_context_latency"`
+	ErrorCount        int     `json:"error_count"`
+	EmbedderAvailPct  float64 `json:"embedder_avail_pct"`
 }
 
 type EvalRun struct {

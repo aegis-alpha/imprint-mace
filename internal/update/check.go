@@ -34,7 +34,7 @@ type githubRelease struct {
 // stderr if a newer version is available. Safe to call from a goroutine.
 // Silently returns on any error (network, parse, file I/O).
 func Check(currentVersion string) {
-	if currentVersion == "dev" || currentVersion == "" {
+	if currentVersion == "" || isDevVersion(currentVersion) {
 		return
 	}
 	if os.Getenv("IMPRINT_NO_UPDATE_CHECK") != "" {
@@ -122,5 +122,17 @@ func printIfNewer(current, latest string) {
 }
 
 func normalizeVersion(v string) string {
-	return strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "v")
+	if idx := strings.Index(v, "+"); idx != -1 {
+		v = v[:idx]
+	}
+	return v
+}
+
+func isDevVersion(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
+	return v == "dev" || strings.HasPrefix(v, "dev+") || strings.Contains(v, "-dev+")
 }

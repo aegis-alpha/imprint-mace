@@ -184,6 +184,11 @@ export VOYAGE_API_KEY="your-key"       # optional -- 200M free tokens/year
 
 The config file defines provider chains (ordered fallback), type taxonomy, and prompt paths. See `config.toml.example` for the full reference.
 
+Vector backend mode is explicit:
+- `read-write` (default): commands and long-running processes that require vector writes run a startup write-path self-test and fail fast if USearch write safety cannot be guaranteed.
+- `read-only`: explicit operator choice; vector search remains available, but vector writes are blocked centrally.
+- `disabled`: no vector backend is attached.
+
 ### Run
 
 ```bash
@@ -225,7 +230,8 @@ echo "Alice decided to use Go for Acme." | ./imprint ingest
 # Evaluate extraction quality against golden set
 ./imprint eval --golden=testdata/golden/
 
-# Evaluate retrieval quality (Recall@10, MRR, per-layer stats)
+# Evaluate retrieval quality (Recall@10, MRR, per-layer stats) against the built-in corpus
+# Uses a pure-Go exact vector backend for eval portability and determinism, not production USearch.
 ./imprint eval-retrieval
 
 # Evaluate retrieval without embedder (graceful degradation test)
@@ -244,6 +250,11 @@ echo "Alice decided to use Go for Acme." | ./imprint ingest
 # Exits with status 1 if any ERROR-level finding (e.g. broken supersede chains).
 ./imprint lint
 ./imprint lint --format=json --check=stale,chains
+
+# Show the build identity.
+# Release builds print the tag (for example v0.7.1).
+# Dev builds print an identifiable dev string (for example v0.7.1-dev+abc1234 or dev+abc1234).
+./imprint version
 ```
 
 Use `--config` to specify a config file (default: `config.toml`, env: `IMPRINT_CONFIG`):
@@ -495,7 +506,7 @@ Run manually: `imprint optimize`. Runs automatically after `ingest-dir`, `watch`
 - **Consolidation:** background grouping of related facts, connection discovery, higher-order insights
 - **Transcript-first storage:** files on disk are the source of truth, DB is a derived index with back-references to file + line range
 - **Self-editing memory:** agents can update fact metadata or supersede facts with corrected content via MCP tools or HTTP API
-- **USearch HNSW vector index:** single `.vecindex` sidecar file, 247x faster than sqlite-vec (~1.1ms vs ~272ms at 200K scale), f16 quantization, SQLite embedding BLOBs as source of truth
+- **USearch HNSW vector index:** single `.vecindex` sidecar file, 247x faster than sqlite-vec (~1.1ms vs ~272ms at 200K scale), f16 quantization, SQLite embedding BLOBs as source of truth. Runtime mode is explicit: read-write requires a startup write-path self-test; read-only is operator-selected, not automatic.
 - **Eval harness:** extraction eval (CaRB-style P/R/F1, NRR, ECE, composite score) + retrieval eval (Recall@10, MRR, per-layer contribution, graceful degradation delta). Built-in golden datasets for both.
 - **Self-tuning quality:** 6 quality signal collectors (supersede rate, citation rate, volume anomaly, entity collision rate, confidence calibration, confidence-citation calibration), Karpathy loop for automatic prompt optimization, query_log instrumentation
 - **17 CLI subcommands**, 405 tests, Docker deployment with Watchtower auto-update
@@ -532,7 +543,7 @@ Measured on commodity hardware (single-core SQLite, no tuning).
 | Provider chain with auto-healing | No single point of failure. If one LLM is down, the next is tried automatically. Error classification (transient vs auth vs model-not-found) drives retry logic. Exhausted providers are flagged in the knowledge base. Model substitution via prefix matching when configured models disappear. |
 | Transcripts as source of truth | DB is a derived index. Files on disk hold the full conversation. Facts back-reference file + line range. Query enriches from disk. |
 | Embedding model metadata | Each embedding stored with model name. On provider switch: selective re-embedding or adapter -- no full re-embedding needed. |
-| USearch sidecar index | Vector ANN lives in a `.vecindex` file next to the DB; dimensions come from config at runtime. Embeddings are also stored as BLOBs on rows for durability. 247x faster than sqlite-vec at 200K scale. |
+| USearch sidecar index | Vector ANN lives in a `.vecindex` file next to the DB; dimensions come from config at runtime. Embeddings are also stored as BLOBs on rows for durability. 247x faster than sqlite-vec at 200K scale. Commands that require vector writes run a startup self-test and fail fast if the write path is unsafe. |
 | Hot-Cool Pipeline (opt-in) | Raw message storage with instant FTS5 + vector search (zero LLM cost). TTL moves messages to cooldown. Cool pipeline clusters by topic and extracts via Engine.Ingest(). Transcript linking prevents duplicate extraction. Query searches hot + cooldown + cold simultaneously. Messages never disappear. |
 
 ## Contributing

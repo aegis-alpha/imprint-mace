@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aegis-alpha/imprint-mace/internal/model"
+	"github.com/aegis-alpha/imprint-mace/internal/vecindex"
 )
 
 func skipIfUSearchBroken(t *testing.T) {
@@ -87,14 +88,14 @@ func TestCreateAndGetFact(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Second)
 	f := &model.Fact{
-		ID:       NewID(),
-		Source:   model.Source{TranscriptFile: "2026-03-14.md", LineRange: &[2]int{10, 20}},
-		FactType: model.FactPreference,
-		Subject:  "Alice",
-		Content:  "Prefers lists over tables",
+		ID:         NewID(),
+		Source:     model.Source{TranscriptFile: "2026-03-14.md", LineRange: &[2]int{10, 20}},
+		FactType:   model.FactPreference,
+		Subject:    "Alice",
+		Content:    "Prefers lists over tables",
 		Confidence: 0.9,
-		Validity: model.TimeRange{ValidFrom: &now},
-		CreatedAt: now,
+		Validity:   model.TimeRange{ValidFrom: &now},
+		CreatedAt:  now,
 	}
 
 	if err := store.CreateFact(ctx, f); err != nil {
@@ -997,6 +998,107 @@ func TestSearchByVector_EmptyDB(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("expected 0 results, got %d", len(results))
+	}
+}
+
+func TestUpdateFactEmbedding_FirstVectorWriteOnAttachedIndex(t *testing.T) {
+	store := vecTestStore(t, 4)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	fact := &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "first-write.md"},
+		FactType: model.FactDecision, Content: "first vector write", CreatedAt: now,
+	}
+	if err := store.CreateFact(ctx, fact); err != nil {
+		t.Fatalf("CreateFact: %v", err)
+	}
+
+	if err := store.UpdateFactEmbedding(ctx, fact.ID, []float32{1, 0, 0, 0}, "test-model"); err != nil {
+		t.Fatalf("first UpdateFactEmbedding should succeed on attached index: %v", err)
+	}
+
+	results, err := store.SearchByVector(ctx, []float32{1, 0, 0, 0}, 5)
+	if err != nil {
+		t.Fatalf("SearchByVector: %v", err)
+	}
+	if len(results) != 1 || results[0].Fact.ID != fact.ID {
+		t.Fatalf("expected first written fact to be searchable, got %+v", results)
+	}
+}
+
+func TestUpdateFactEmbedding_RepeatedVectorWritesOnAttachedIndex(t *testing.T) {
+	store := vecTestStore(t, 4)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	ids := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		fact := &model.Fact{
+			ID: NewID(), Source: model.Source{TranscriptFile: "repeat-write.md"},
+			FactType: model.FactDecision, Content: fmt.Sprintf("vector write %d", i), CreatedAt: now,
+		}
+		if err := store.CreateFact(ctx, fact); err != nil {
+			t.Fatalf("CreateFact %d: %v", i, err)
+		}
+		if err := store.UpdateFactEmbedding(ctx, fact.ID, []float32{float32(i + 1), 0, 0, 0}, "test-model"); err != nil {
+			t.Fatalf("UpdateFactEmbedding %d: %v", i, err)
+		}
+		ids = append(ids, fact.ID)
+	}
+
+	results, err := store.SearchByVector(ctx, []float32{1, 0, 0, 0}, 10)
+	if err != nil {
+		t.Fatalf("SearchByVector: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 searchable facts after repeated writes, got %d", len(results))
+	}
+}
+
+func TestVectorBackend_ReadOnlyBlocksWritesButAllowsReads(t *testing.T) {
+	store := vecTestStore(t, 4)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Second)
+
+	fact := &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "read-only.md"},
+		FactType: model.FactDecision, Content: "existing vector fact", CreatedAt: now,
+	}
+	if err := store.CreateFact(ctx, fact); err != nil {
+		t.Fatalf("CreateFact: %v", err)
+	}
+	if err := store.UpdateFactEmbedding(ctx, fact.ID, []float32{1, 0, 0, 0}, "test-model"); err != nil {
+		t.Fatalf("initial UpdateFactEmbedding: %v", err)
+	}
+
+	store.SetVectorCapability(vecindex.Capability{
+		Backend:       "usearch",
+		Mode:          vecindex.ModeReadOnly,
+		Status:        vecindex.HealthReadOnly,
+		ReadAvailable: true,
+		WriteSafe:     false,
+		Detail:        "operator selected explicit read-only mode",
+	})
+
+	results, err := store.SearchByVector(ctx, []float32{1, 0, 0, 0}, 5)
+	if err != nil {
+		t.Fatalf("SearchByVector in read-only mode: %v", err)
+	}
+	if len(results) != 1 || results[0].Fact.ID != fact.ID {
+		t.Fatalf("expected read-only search to still work, got %+v", results)
+	}
+
+	fact2 := &model.Fact{
+		ID: NewID(), Source: model.Source{TranscriptFile: "read-only.md"},
+		FactType: model.FactDecision, Content: "new vector fact", CreatedAt: now,
+	}
+	if err := store.CreateFact(ctx, fact2); err != nil {
+		t.Fatalf("CreateFact second fact: %v", err)
+	}
+	err = store.UpdateFactEmbedding(ctx, fact2.ID, []float32{0, 1, 0, 0}, "test-model")
+	if !errors.Is(err, ErrVectorWriteUnsafe) {
+		t.Fatalf("expected ErrVectorWriteUnsafe in read-only mode, got %v", err)
 	}
 }
 

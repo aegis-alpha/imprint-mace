@@ -37,18 +37,20 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/segment"
 	"github.com/aegis-alpha/imprint-mace/internal/transcript"
 	"github.com/aegis-alpha/imprint-mace/internal/update"
+	"github.com/aegis-alpha/imprint-mace/internal/vecindex"
 	"github.com/aegis-alpha/imprint-mace/internal/watcher"
 )
 
 var version = "dev"
 
 func main() {
+	currentVersion := resolvedVersion()
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "version") {
-		fmt.Printf("imprint %s\n", version)
+		fmt.Printf("imprint %s\n", currentVersion)
 		os.Exit(0)
 	}
 
-	go update.Check(version)
+	go update.Check(currentVersion)
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -156,9 +158,9 @@ func main() {
 				watchFlag = a[8:]
 			}
 		}
-		runServe(logger, *cfgPath, hostFlag, portFlag, watchFlag)
+		runServe(logger, *cfgPath, hostFlag, portFlag, watchFlag, currentVersion)
 	case "mcp":
-		runMCP(logger, *cfgPath)
+		runMCP(logger, *cfgPath, currentVersion)
 	case "export":
 		format, output := "json", ""
 		for _, a := range args[1:] {
@@ -251,7 +253,9 @@ func main() {
 	case "lint":
 		runLint(logger, *cfgPath, args[1:])
 	case "version":
-		fmt.Printf("imprint %s\n", version)
+		fmt.Printf("imprint %s\n", currentVersion)
+	case "vector-self-test":
+		runVectorSelfTestCommand(logger, args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", cmd)
 		os.Exit(1)
@@ -271,16 +275,16 @@ func loadConfig(logger *slog.Logger, cfgPath string) *config.Config {
 }
 
 func openStore(logger *slog.Logger, cfg *config.Config) *db.SQLiteStore {
+	return openStoreWithVectorAccess(logger, cfg, vectorAccessReadOnly)
+}
+
+func openStoreWithVectorAccess(logger *slog.Logger, cfg *config.Config, access vectorAccessMode) *db.SQLiteStore {
 	store, err := db.Open(cfg.DB.Path)
 	if err != nil {
 		logger.Error("failed to open database", "path", cfg.DB.Path, "error", err)
 		os.Exit(1)
 	}
-	dims := cfg.EffectiveEmbeddingDims()
-	if err := store.AttachVectorIndex(dims); err != nil {
-		logger.Error("failed to open vector index", "error", err)
-		os.Exit(1)
-	}
+	configureVectorBackend(logger, cfg, store, access)
 	return store
 }
 
@@ -619,7 +623,7 @@ func runOptimization(ctx context.Context, logger *slog.Logger, cfg *config.Confi
 
 func runIngest(logger *slog.Logger, cfgPath string) {
 	cfg := loadConfig(logger, cfgPath)
-	store := openStore(logger, cfg)
+	store := openStoreWithVectorAccess(logger, cfg, vectorAccessWriteRequired)
 	defer store.Close()
 
 	eng := createEngine(logger, cfg, store)
@@ -651,7 +655,7 @@ func runIngest(logger *slog.Logger, cfgPath string) {
 
 func runIngestDir(logger *slog.Logger, cfgPath, dir string, consolidate bool) {
 	cfg := loadConfig(logger, cfgPath)
-	store := openStore(logger, cfg)
+	store := openStoreWithVectorAccess(logger, cfg, vectorAccessWriteRequired)
 	defer store.Close()
 
 	eng := createEngine(logger, cfg, store)
@@ -687,7 +691,7 @@ func runIngestDir(logger *slog.Logger, cfgPath, dir string, consolidate bool) {
 
 func runWatch(logger *slog.Logger, cfgPath, dir string) {
 	cfg := loadConfig(logger, cfgPath)
-	store := openStore(logger, cfg)
+	store := openStoreWithVectorAccess(logger, cfg, vectorAccessWriteRequired)
 	defer store.Close()
 
 	eng := createEngine(logger, cfg, store)
@@ -851,7 +855,7 @@ func printEvalScores(ctx context.Context, store *db.SQLiteStore) {
 
 func runEmbedBackfill(logger *slog.Logger, cfgPath, modelFilter string) {
 	cfg := loadConfig(logger, cfgPath)
-	store := openStore(logger, cfg)
+	store := openStoreWithVectorAccess(logger, cfg, vectorAccessWriteRequired)
 	defer store.Close()
 
 	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
@@ -906,7 +910,7 @@ func runEmbedBackfill(logger *slog.Logger, cfgPath, modelFilter string) {
 
 func runEmbedBackfillChunks(logger *slog.Logger, cfgPath, modelFilter string) {
 	cfg := loadConfig(logger, cfgPath)
-	store := openStore(logger, cfg)
+	store := openStoreWithVectorAccess(logger, cfg, vectorAccessWriteRequired)
 	defer store.Close()
 
 	embChain, err := provider.NewEmbedderChain(providerConfigsForTask(cfg, "embedding"))
@@ -1002,9 +1006,9 @@ func runQuery(logger *slog.Logger, cfgPath, question string) {
 	fmt.Println(string(data))
 }
 
-func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watchDir string) {
+func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watchDir string, currentVersion string) {
 	cfg := loadConfig(logger, cfgPath)
-	store := openStore(logger, cfg)
+	store := openStoreWithVectorAccess(logger, cfg, vectorAccessWriteRequired)
 	defer store.Close()
 
 	if !prismModeEnabled(cfg) {
@@ -1122,7 +1126,7 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 		addr = fmt.Sprintf("%s:%d", host, port)
 	}
 
-	handler := api.NewHandlerWithBuilder(eng, store, q, builder, version, logger)
+	handler := api.NewHandlerWithBuilder(eng, store, q, builder, currentVersion, logger)
 
 	serveQualityCfg := cfg.EffectiveQualityConfig()
 	if serveQualityCfg.Enabled == nil || *serveQualityCfg.Enabled {
@@ -1204,16 +1208,16 @@ func runServe(logger *slog.Logger, cfgPath, hostFlag string, portFlag int, watch
 	}
 }
 
-func runMCP(logger *slog.Logger, cfgPath string) {
+func runMCP(logger *slog.Logger, cfgPath, currentVersion string) {
 	cfg := loadConfig(logger, cfgPath)
-	store := openStore(logger, cfg)
+	store := openStoreWithVectorAccess(logger, cfg, vectorAccessWriteRequired)
 	defer store.Close()
 
 	eng := createEngine(logger, cfg, store)
 	q := createQuerier(logger, cfg, store)
 	builder := createBuilder(cfg, store, logger)
 
-	srv := impmcp.NewWithBuilder(eng, store, q, builder, version, logger)
+	srv := impmcp.NewWithBuilder(eng, store, q, builder, currentVersion, logger)
 	hotEffective := cfg.EffectiveHotConfig()
 	srv.SetEmbedder(newEmbedderChainOptional(cfg))
 	srv.SetHotEnabled(cfg.HotEnabled())
@@ -1558,6 +1562,7 @@ func runEval(logger *slog.Logger, cfgPath, goldenDir, format string, saveBaselin
 
 func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bool, mergeStrategy string, saveBaseline, check bool, threshold float64) {
 	cfg, _ := config.Load(cfgPath)
+	evalType := "retrieval"
 
 	tmpDir, err := os.MkdirTemp("", "imprint-eval-retrieval-*")
 	if err != nil {
@@ -1578,14 +1583,20 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 	if cfg != nil {
 		dims = cfg.EffectiveEmbeddingDims()
 	}
-	if err := tmpStore.AttachVectorIndex(dims); err != nil {
-		logger.Error("failed to attach vector index for eval DB", "error", err)
-		os.Exit(1)
-	}
+	tmpStore.SetVectorIndex(vecindex.NewExactIndex(dims))
+	tmpStore.SetVectorCapability(vecindex.Capability{
+		Backend:       "exact",
+		Mode:          vecindex.ModeReadWrite,
+		Status:        vecindex.HealthHealthy,
+		ReadAvailable: true,
+		WriteSafe:     true,
+		Detail:        "eval uses pure-Go exact vector backend",
+	})
 
 	ctx := context.Background()
 
 	seed := impeval.BuiltinRetrievalSeed()
+	examples := impeval.BuiltinRetrievalExamples()
 	nf, ne, nr, err := impeval.SeedDB(ctx, tmpStore, seed)
 	if err != nil {
 		logger.Error("failed to seed eval database", "error", err)
@@ -1599,7 +1610,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 		if embErr == nil && embChain != nil {
 			embedder = embChain
 
-			fmt.Fprintf(os.Stderr, "Embedding %d seed facts...\n", nf)
+			fmt.Fprintf(os.Stderr, "Embedding %d seed facts with exact eval backend...\n", nf)
 			for i := range seed.Facts {
 				f := &seed.Facts[i]
 				vec, err := embChain.Embed(ctx, f.Content)
@@ -1654,8 +1665,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 	}
 	q := query.New(tmpStore, embedder, sender, "", logger, qOpts...)
 
-	examples := impeval.BuiltinRetrievalExamples()
-	fmt.Fprintf(os.Stderr, "Running retrieval eval: %d questions (merge=%s)\n", len(examples), mergeStrategy)
+	fmt.Fprintf(os.Stderr, "Running retrieval eval: questions=%d (merge=%s)\n", len(examples), mergeStrategy)
 
 	report, err := impeval.RunRetrieval(ctx, q, examples)
 	if err != nil {
@@ -1678,13 +1688,13 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 		return
 	}
 
-	runID := persistRetrievalEval(ctx, logger, cfg, report)
+	runID := persistRetrievalEval(ctx, logger, cfg, report, evalType)
 
 	mainStore := openStore(logger, cfg)
 	defer mainStore.Close()
 
 	if saveBaseline && runID != "" {
-		if err := mainStore.SetBaseline(ctx, runID, "retrieval"); err != nil {
+		if err := mainStore.SetBaseline(ctx, runID, evalType); err != nil {
 			logger.Error("failed to set baseline", "error", err)
 		} else {
 			fmt.Fprintln(os.Stderr, "Baseline saved for retrieval eval")
@@ -1692,7 +1702,7 @@ func runEvalRetrieval(logger *slog.Logger, cfgPath, format string, noEmbedder bo
 	}
 
 	if check {
-		runRegressionCheck(ctx, logger, mainStore, "retrieval", report.RecallAt10, threshold)
+		runRegressionCheck(ctx, logger, mainStore, evalType, report.RecallAt10, threshold)
 	}
 }
 
@@ -1728,7 +1738,7 @@ func persistExtractionEval(ctx context.Context, logger *slog.Logger, cfg *config
 	return run.ID
 }
 
-func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.RetrievalReport) string {
+func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.Config, report *impeval.RetrievalReport, evalType string) string {
 	store := openStore(logger, cfg)
 	defer store.Close()
 
@@ -1740,7 +1750,7 @@ func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.
 
 	run := &db.EvalRun{
 		ID:            db.NewID(),
-		EvalType:      "retrieval",
+		EvalType:      evalType,
 		Score:         report.RecallAt10,
 		Score2:        report.MRR,
 		ExamplesCount: report.TotalQuestions,
@@ -1752,7 +1762,7 @@ func persistRetrievalEval(ctx context.Context, logger *slog.Logger, cfg *config.
 		logger.Warn("failed to persist retrieval eval run", "error", err)
 		return ""
 	}
-	fmt.Fprintf(os.Stderr, "Retrieval eval run saved (recall@10=%.4f, mrr=%.4f, id=%s)\n", run.Score, run.Score2, run.ID)
+	fmt.Fprintf(os.Stderr, "Retrieval eval run saved (%s recall@10=%.4f, mrr=%.4f, id=%s)\n", run.EvalType, run.Score, run.Score2, run.ID)
 	autoUpdateBaseline(ctx, logger, store, run)
 	return run.ID
 }
@@ -1820,7 +1830,7 @@ func runRetrievalEvalQuiet(ctx context.Context, logger *slog.Logger, cfg *config
 		"questions", len(examples),
 		"seed_facts", nf,
 	)
-	persistRetrievalEval(ctx, logger, cfg, report)
+	persistRetrievalEval(ctx, logger, cfg, report, "retrieval")
 }
 
 func gitCommitShort() string {
@@ -2045,7 +2055,7 @@ func runPostOptimizeEval(logger *slog.Logger, cfg *config.Config, store *db.SQLi
 		return
 	}
 	fmt.Fprintf(os.Stderr, "Retrieval recall@10: %.4f  mrr: %.4f\n", report.RecallAt10, report.MRR)
-	persistRetrievalEval(ctx, logger, cfg, report)
+	persistRetrievalEval(ctx, logger, cfg, report, "retrieval")
 }
 
 func runGC(logger *slog.Logger, cfgPath string) {

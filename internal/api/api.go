@@ -32,6 +32,7 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/quality"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
+	"github.com/aegis-alpha/imprint-mace/internal/vecindex"
 )
 
 type Handler struct {
@@ -139,6 +140,7 @@ func (h *Handler) methodDELETE(handler http.HandlerFunc) http.HandlerFunc {
 type statusResponse struct {
 	Version         string                   `json:"version"`
 	Stats           *db.DBStats              `json:"stats"`
+	VectorBackend   *vecindex.Capability     `json:"vector_backend,omitempty"`
 	QualitySignals  []qualitySignalResponse  `json:"quality_signals,omitempty"`
 	QueryStats      *db.QueryLogStatsResult  `json:"query_stats,omitempty"`
 	EvalScores      *evalScoresResponse      `json:"eval_scores,omitempty"`
@@ -187,6 +189,10 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := statusResponse{Version: h.version, Stats: stats}
+	if sqlStore, ok := h.store.(*db.SQLiteStore); ok {
+		capability := sqlStore.VectorCapability()
+		resp.VectorBackend = &capability
+	}
 
 	signals, err := h.store.ListQualitySignals(ctx, "", 100)
 	if err == nil && len(signals) > 0 {

@@ -24,9 +24,10 @@ import (
 var migrations embed.FS
 
 type SQLiteStore struct {
-	db       *sql.DB
-	dbPath   string
-	vecIndex vecindex.VectorIndex
+	db               *sql.DB
+	dbPath           string
+	vecIndex         vecindex.VectorIndex
+	vectorCapability vecindex.Capability
 }
 
 func Open(path string) (*SQLiteStore, error) {
@@ -34,7 +35,11 @@ func Open(path string) (*SQLiteStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	s := &SQLiteStore{db: db, dbPath: path}
+	s := &SQLiteStore{
+		db:               db,
+		dbPath:           path,
+		vectorCapability: vecindex.DisabledCapability("vector backend not configured"),
+	}
 	if err := s.migrate(); err != nil {
 		db.Close() //nolint:gosec // best-effort cleanup on migration failure
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -59,15 +64,38 @@ func (s *SQLiteStore) Close() error {
 // SetVectorIndex attaches a USearch (or nil) index for vector search and updates.
 func (s *SQLiteStore) SetVectorIndex(v vecindex.VectorIndex) {
 	s.vecIndex = v
+	if v == nil {
+		s.vectorCapability = vecindex.DisabledCapability("vector backend detached")
+		return
+	}
+	if !s.vectorCapability.ReadAvailable && !s.vectorCapability.WriteSafe {
+		s.vectorCapability = vecindex.Capability{
+			Backend:       "custom",
+			Mode:          vecindex.ModeReadWrite,
+			Status:        vecindex.HealthHealthy,
+			ReadAvailable: true,
+			WriteSafe:     true,
+		}
+	}
+}
+
+func (s *SQLiteStore) SetVectorCapability(cap vecindex.Capability) {
+	s.vectorCapability = cap
+}
+
+func (s *SQLiteStore) VectorCapability() vecindex.Capability {
+	return s.vectorCapability
 }
 
 // AttachVectorIndex opens the on-disk USearch cache next to this database.
 // No-op for :memory: or non-positive dimensions.
 func (s *SQLiteStore) AttachVectorIndex(dims int) error {
 	if dims <= 0 {
+		s.vectorCapability = vecindex.DisabledCapability("embedding dimensions not configured")
 		return nil
 	}
 	if s.dbPath == "" || s.dbPath == ":memory:" {
+		s.vectorCapability = vecindex.DisabledCapability("vector cache disabled for in-memory database")
 		return nil
 	}
 	if s.vecIndex != nil {
@@ -81,6 +109,13 @@ func (s *SQLiteStore) AttachVectorIndex(dims int) error {
 		return err
 	}
 	s.vecIndex = vi
+	s.vectorCapability = vecindex.Capability{
+		Backend:       "usearch",
+		Mode:          vecindex.ModeReadWrite,
+		Status:        vecindex.HealthHealthy,
+		ReadAvailable: true,
+		WriteSafe:     true,
+	}
 	return nil
 }
 
@@ -505,6 +540,10 @@ func (s *SQLiteStore) SupersedeWithContent(ctx context.Context, oldFactID string
 }
 
 func (s *SQLiteStore) UpdateFactEmbedding(ctx context.Context, factID string, embedding []float32, modelName string) error {
+	if s.vecIndex != nil && !s.vectorCapability.WriteSafe {
+		return fmt.Errorf("%w: backend=%s mode=%s detail=%s",
+			ErrVectorWriteUnsafe, s.vectorCapability.Backend, s.vectorCapability.Mode, s.vectorCapability.Detail)
+	}
 	blob := float32ToBlob(embedding)
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE facts SET embedding = ?, embedding_model = ? WHERE id = ?", blob, modelName, factID)
@@ -575,6 +614,9 @@ func blobToFloat32(b []byte) []float32 {
 func (s *SQLiteStore) SearchByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredFact, error) {
 	if s.vecIndex == nil {
 		return nil, nil
+	}
+	if !s.vectorCapability.ReadAvailable {
+		return nil, ErrVectorReadUnavailable
 	}
 	const pref = "fact:"
 	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
@@ -1258,6 +1300,10 @@ func (s *SQLiteStore) DeleteTranscriptChunks(ctx context.Context, transcriptID s
 }
 
 func (s *SQLiteStore) UpdateChunkEmbedding(ctx context.Context, chunkID string, embedding []float32, modelName string) error {
+	if s.vecIndex != nil && !s.vectorCapability.WriteSafe {
+		return fmt.Errorf("%w: backend=%s mode=%s detail=%s",
+			ErrVectorWriteUnsafe, s.vectorCapability.Backend, s.vectorCapability.Mode, s.vectorCapability.Detail)
+	}
 	blob := float32ToBlob(embedding)
 	_, err := s.db.ExecContext(ctx,
 		"UPDATE transcript_chunks SET embedding = ?, embedding_model = ? WHERE id = ?", blob, modelName, chunkID)
@@ -1276,6 +1322,9 @@ func (s *SQLiteStore) UpdateChunkEmbedding(ctx context.Context, chunkID string, 
 func (s *SQLiteStore) SearchChunksByVector(ctx context.Context, embedding []float32, limit int) ([]ScoredChunk, error) {
 	if s.vecIndex == nil {
 		return nil, nil
+	}
+	if !s.vectorCapability.ReadAvailable {
+		return nil, ErrVectorReadUnavailable
 	}
 	const pref = "chunk:"
 	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
@@ -2577,6 +2626,10 @@ func (s *SQLiteStore) InsertHotMessage(ctx context.Context, msg *model.HotMessag
 	if msg == nil {
 		return errors.New("db: nil hot message")
 	}
+	if len(embedding) > 0 && s.vecIndex != nil && !s.vectorCapability.WriteSafe {
+		return fmt.Errorf("%w: backend=%s mode=%s detail=%s",
+			ErrVectorWriteUnsafe, s.vectorCapability.Backend, s.vectorCapability.Mode, s.vectorCapability.Detail)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -2714,6 +2767,9 @@ func (s *SQLiteStore) SearchHotByVector(ctx context.Context, embedding []float32
 	if len(embedding) == 0 || limit <= 0 || s.vecIndex == nil {
 		return nil, nil
 	}
+	if !s.vectorCapability.ReadAvailable {
+		return nil, ErrVectorReadUnavailable
+	}
 	const pref = "hot:"
 	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
 	if err != nil {
@@ -2842,6 +2898,9 @@ func (s *SQLiteStore) SearchCooldownByVector(ctx context.Context, embedding []fl
 	if len(embedding) == 0 || limit <= 0 || s.vecIndex == nil {
 		return nil, nil
 	}
+	if !s.vectorCapability.ReadAvailable {
+		return nil, ErrVectorReadUnavailable
+	}
 	const pref = "cool:"
 	hits, err := s.vecIndex.SearchWithPrefix(embedding, limit, pref)
 	if err != nil {
@@ -2874,6 +2933,10 @@ func (s *SQLiteStore) SearchCooldownByVector(ctx context.Context, embedding []fl
 func (s *SQLiteStore) MoveHotToCooldown(ctx context.Context, olderThan time.Time, batchSize int) (int64, error) {
 	if batchSize <= 0 {
 		return 0, nil
+	}
+	if s.vecIndex != nil && !s.vectorCapability.WriteSafe {
+		return 0, fmt.Errorf("%w: backend=%s mode=%s detail=%s",
+			ErrVectorWriteUnsafe, s.vectorCapability.Backend, s.vectorCapability.Mode, s.vectorCapability.Detail)
 	}
 	cutoff := olderThan.UTC().Format(time.RFC3339)
 	movedAt := time.Now().UTC().Format(time.RFC3339)

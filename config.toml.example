@@ -14,6 +14,13 @@ dedup_similarity_threshold = 0.9
 dimensions = 1536          # 1536 for OpenAI text-embedding-3-small, 768 for nomic-embed-text
 distance_metric = "cosine" # cosine (default) or L2
 
+# Vector backend mode:
+#   read-write (default): require startup write-path self-test for commands/processes that need vector writes
+#   read-only: explicit operator choice, search allowed, vector writes blocked centrally
+#   disabled: no vector backend attached
+# [vector]
+# mode = "read-write"
+
 # Prism mode (single-endpoint routing for all tasks: extraction/query/consolidation/embedding/rerank)
 # When enabled, Imprint ignores [[providers.*]] chains and sends all task requests to this endpoint
 # with task headers: X-Prism-Task and X-Prism-App.

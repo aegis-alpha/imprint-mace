@@ -21,6 +21,7 @@ import (
 	"github.com/aegis-alpha/imprint-mace/internal/model"
 	"github.com/aegis-alpha/imprint-mace/internal/provider"
 	"github.com/aegis-alpha/imprint-mace/internal/query"
+	"github.com/aegis-alpha/imprint-mace/internal/vecindex"
 )
 
 type mockSender struct {
@@ -114,6 +115,43 @@ func TestStatus_ReturnsStats(t *testing.T) {
 	}
 }
 
+func TestStatus_IncludesVectorBackendCapability(t *testing.T) {
+	h, store := testAPI(t)
+	sqlStore, ok := store.(*db.SQLiteStore)
+	if !ok {
+		t.Fatal("expected *db.SQLiteStore from testAPI")
+	}
+	sqlStore.SetVectorCapability(vecindex.Capability{
+		Backend:       "usearch",
+		Mode:          vecindex.ModeReadOnly,
+		Status:        vecindex.HealthReadOnly,
+		ReadAvailable: true,
+		WriteSafe:     false,
+		Detail:        "operator selected explicit read-only mode",
+	})
+
+	req := httptest.NewRequest("GET", "/status", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp statusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse JSON: %v", err)
+	}
+	if resp.VectorBackend == nil {
+		t.Fatal("expected vector_backend in status response")
+	}
+	if resp.VectorBackend.Mode != vecindex.ModeReadOnly {
+		t.Fatalf("expected read-only mode, got %q", resp.VectorBackend.Mode)
+	}
+	if resp.VectorBackend.WriteSafe {
+		t.Fatal("expected write_safe=false in read-only mode")
+	}
+}
+
 func TestStatus_CoolStatsJSONUsesSnakeCase(t *testing.T) {
 	h, store := testAPI(t)
 	ctx := context.Background()
@@ -152,6 +190,62 @@ func TestStatus_CoolStatsJSONUsesSnakeCase(t *testing.T) {
 	}
 	if strings.Contains(body, `"ClustersPending"`) {
 		t.Errorf("response should not contain PascalCase ClustersPending, body: %s", body)
+	}
+}
+
+func TestStatus_StatsJSONUsesSnakeCase(t *testing.T) {
+	h, store := testAPI(t)
+	ctx := context.Background()
+
+	if err := store.CreateEntity(ctx, &model.Entity{
+		ID: "stats-e1", Name: "Alice", EntityType: model.EntityPerson, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/status", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"stats":{"facts":0,"entities":1,"relationships":0,"consolidations":0,"ingested_files":0,"hot_messages":0,"cooldown_messages":0}`) {
+		t.Errorf("response should contain snake_case stats keys, body: %s", body)
+	}
+	if strings.Contains(body, `"Facts"`) || strings.Contains(body, `"Entities"`) {
+		t.Errorf("response should not contain PascalCase stats keys, body: %s", body)
+	}
+}
+
+func TestStatus_QueryStatsJSONUsesSnakeCase(t *testing.T) {
+	h, store := testAPI(t)
+	ctx := context.Background()
+
+	if err := store.CreateQueryLog(ctx, &db.QueryLog{
+		ID:                "qlog-1",
+		Endpoint:          "query",
+		TotalLatencyMs:    200,
+		EmbedderAvailable: true,
+		CreatedAt:         time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/status", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"query_stats":{"total_queries":1,"total_context":0`) {
+		t.Errorf("response should contain snake_case query_stats keys, body: %s", body)
+	}
+	if strings.Contains(body, `"TotalQueries"`) || strings.Contains(body, `"AvgQueryLatency"`) {
+		t.Errorf("response should not contain PascalCase query_stats keys, body: %s", body)
 	}
 }
 

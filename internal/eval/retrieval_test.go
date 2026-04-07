@@ -80,8 +80,8 @@ func TestRunRetrievalPerfect(t *testing.T) {
 				FactsByText:   1,
 			},
 			"Who is Alice?": {
-				Ranked:        makeRanked([]string{"f-alice-telegram"}, false, true, false),
-				FactsByText:   1,
+				Ranked:      makeRanked([]string{"f-alice-telegram"}, false, true, false),
+				FactsByText: 1,
 			},
 		},
 	}
@@ -119,8 +119,8 @@ func TestRunRetrievalPartial(t *testing.T) {
 	retriever := &mockRetriever{
 		results: map[string]*query.RetrievalResult{
 			"multi-hop question": {
-				Ranked:        makeRanked([]string{"f-a", "f-b", "f-extra"}, false, true, false),
-				FactsByText:   3,
+				Ranked:      makeRanked([]string{"f-a", "f-b", "f-extra"}, false, true, false),
+				FactsByText: 3,
 			},
 		},
 	}
@@ -151,7 +151,7 @@ func TestRunRetrievalNoise(t *testing.T) {
 	retriever := &mockRetriever{
 		results: map[string]*query.RetrievalResult{
 			"irrelevant question": {},
-			"another noise":      {Ranked: makeRanked([]string{"f-spurious"}, false, true, false), FactsByText: 1},
+			"another noise":       {Ranked: makeRanked([]string{"f-spurious"}, false, true, false), FactsByText: 1},
 		},
 	}
 
@@ -290,7 +290,7 @@ func TestWriteRetrievalTable(t *testing.T) {
 		CategoryScores: map[string]CategoryRecall{
 			"direct_lookup": {Count: 3, Recall10: 0.9, MRR: 0.8},
 		},
-		LayerStats: LayerStats{VectorHits: 3, TextHits: 2, GraphHits: 1},
+		LayerStats:  LayerStats{VectorHits: 3, TextHits: 2, GraphHits: 1},
 		NoiseResult: NoiseRetrievalResult{Total: 2, ZeroResults: 1, RejectionRate: 0.5},
 	}
 

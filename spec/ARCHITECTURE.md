@@ -154,6 +154,8 @@ Message arrives (from hook/API)
 
 **USearch vector index (D36, BVP-365):** Single `.vecindex` sidecar file next to the SQLite database. All vector tables (facts, chunks, hot messages, cooldown messages) share one HNSW index. Keys are prefixed to avoid collisions: `fact:<ulid>`, `chunk:<ulid>`, `hot:<ulid>`, `cool:<ulid>`. The uint64 key in USearch is FNV-64 hash of the prefixed string key. SQLite embedding BLOB columns are the source of truth; the cache file is expendable and rebuildable. Load time: ~75ms for 200K vectors. Search time: ~1.1ms at 200K scale (247x faster than sqlite-vec brute-force).
 
+**Write-path invariant:** `internal/vecindex.USearchIndex` owns write safety centrally. Callers do not reserve capacity manually. Before every native `Add()`, the wrapper ensures the fresh or grown index has reserved capacity for the next write. This protects the first write on a fresh index and repeated growth writes behind one internal contract instead of caller discipline.
+
 ---
 
 ## 2. Query Pipeline
@@ -488,6 +490,26 @@ Vector search uses USearch (C library + Go bindings) instead of sqlite-vec. Sing
 3. **Runtime:** `index.Add()` on each new embedding, `index.Search()` for queries.
 4. **Shutdown:** `index.Save()` via atomic write (temp file + `os.Rename`). ~316ms for 200K.
 
+**Capability model:** Runtime code carries one explicit vector backend capability state:
+- `healthy` + `mode=read-write`: read available, write safe
+- `read_only` + `mode=read-only`: read available, write blocked centrally
+- `disabled` + `mode=disabled`: no vector backend attached
+- `unhealthy`: self-test or attach failed; write-required startup aborts before serving traffic
+
+The state is stored on `SQLiteStore` and exposed via `/status` as `vector_backend`.
+
+**Startup self-test:** Commands and runtimes that require vector writes do not trust in-process native probing, because a failing `usearch_add` can segfault the process. Instead, Imprint runs a subprocess self-test against a scratch index:
+- fresh first `Add()`
+- repeated `Add()`
+- save/load
+- search after reload
+
+If `[vector].mode = "read-write"` and that self-test fails, startup is fatal. Logs state:
+- which backend failed
+- which self-test failed
+- that read/search may still be alive
+- that startup is fatal because memory writes cannot be guaranteed
+
 **Performance:** ~1.1ms search at 200K scale, 247x faster than sqlite-vec brute-force (~272ms estimated).
 
 **Legacy sqlite-vec:** The `facts_vec` and `chunks_vec` virtual tables remain in the module graph for migration and optional backfill from older deployments. New code uses USearch exclusively.
@@ -694,6 +716,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 | `[llm]` | Prism mode base URL (single-endpoint routing for all LLM tasks) |
 | `[consolidation]` | Interval, min_facts threshold, max_group_size, dedup threshold, cluster_similarity_threshold (default 0.40) |
 | `[embedding]` | Dimensions, distance metric |
+| `[vector]` | Vector backend mode: `read-write` (default), `read-only`, or `disabled` |
 | `[watcher]` | Watch path, poll interval, debounce, consolidate-after-ingest flag |
 | `[prompts]` | Paths to extraction, consolidation, and query prompt templates |
 | `[[providers.*]]` | Provider chains for extraction, consolidation, query, embedding, reranker |
@@ -709,6 +732,7 @@ TOML config with environment variables for secrets. See `config.toml.example` fo
 ### 7.2 Defaults
 
 - `EffectiveEmbeddingDims()`: returns configured dimensions, or 1536 if not set.
+- `EffectiveVectorConfig()`: defaults `vector.mode` to `read-write`.
 - `EffectiveAPIAddr()`: returns configured host:port, or `127.0.0.1:8080` if not set.
 - `EffectiveTypes()`: returns configured types, falling back to built-in defaults (12 fact, 9 entity, 9 relation, 6 connection types) for any empty category.
 - `EffectiveGCAfterDays()`: returns configured gc_after_days, or 30 if not set.
@@ -772,6 +796,13 @@ Table (default) or JSON (`--format=json`). The composite score is a single numbe
 ### 10.5 Retrieval Eval
 
 `imprint eval-retrieval` evaluates the retrieval pipeline (without LLM synthesis). It seeds a temporary database with a built-in golden dataset (32 facts, 33 entities, 17 relationships from a consistent test universe), then runs 21 golden questions across 5 categories.
+
+Eval does not depend on production USearch ANN. When embeddings are enabled, the temp DB uses a pure-Go exact vector backend:
+- deterministic ordering
+- no cgo/native ANN dependency
+- suitable for small eval datasets
+
+This keeps production on USearch for speed, while the harness optimizes for correctness, portability, and reproducibility.
 
 **Categories:**
 

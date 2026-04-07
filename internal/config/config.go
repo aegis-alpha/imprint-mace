@@ -27,6 +27,7 @@ type Config struct {
 	Context       ContextConfig       `toml:"context"`
 	Quality       QualityConfig       `toml:"quality"`
 	Health        HealthConfig        `toml:"health"`
+	Vector        VectorConfig        `toml:"vector"`
 	OpenClaw      OpenClawConfig      `toml:"openclaw"`
 	Hot           HotConfig           `toml:"hot"`
 	Cool          CoolConfig          `toml:"cool"`
@@ -331,6 +332,20 @@ type HealthConfig struct {
 	QueueTTLHours      int `toml:"queue_ttl_hours"`
 }
 
+type VectorConfig struct {
+	Mode string `toml:"mode"`
+}
+
+func (c *Config) EffectiveVectorConfig() VectorConfig {
+	v := c.Vector
+	mode := strings.TrimSpace(strings.ToLower(v.Mode))
+	if mode == "" {
+		mode = "read-write"
+	}
+	v.Mode = mode
+	return v
+}
+
 func (c *Config) EffectiveHealthConfig() HealthConfig {
 	h := c.Health
 	if h.CatalogRefreshDays == 0 {
@@ -469,6 +484,11 @@ func (c *Config) validate() error {
 	}
 	if c.CoolEnabled() && !c.HotEnabled() {
 		return fmt.Errorf("cool.enabled requires hot.enabled")
+	}
+	switch c.EffectiveVectorConfig().Mode {
+	case "read-write", "read-only", "disabled":
+	default:
+		return fmt.Errorf("vector.mode must be one of read-write, read-only, disabled")
 	}
 	if c.CoolEnabled() {
 		ec := c.EffectiveCoolConfig()

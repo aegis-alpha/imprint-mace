@@ -12,6 +12,8 @@ import (
 
 func TestCheck_DevVersion_Skips(t *testing.T) {
 	Check("dev")
+	Check("dev+abcdef1")
+	Check("v0.7.1-dev+abcdef1")
 	Check("")
 }
 
@@ -125,11 +127,31 @@ func TestNormalizeVersion(t *testing.T) {
 		{"v0.1.0", "0.1.0"},
 		{"0.1.0", "0.1.0"},
 		{"v1.2.3", "1.2.3"},
+		{"v0.7.1+abcdef1", "0.7.1"},
+		{"v0.7.1-dev+abcdef1", "0.7.1-dev"},
 	}
 	for _, tt := range tests {
 		got := normalizeVersion(tt.input)
 		if got != tt.want {
 			t.Errorf("normalizeVersion(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestIsDevVersion(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"", false},
+		{"dev", true},
+		{"dev+abcdef1", true},
+		{"v0.7.1-dev+abcdef1", true},
+		{"v0.7.1", false},
+	}
+	for _, tt := range tests {
+		if got := isDevVersion(tt.input); got != tt.want {
+			t.Fatalf("isDevVersion(%q) = %v, want %v", tt.input, got, tt.want)
 		}
 	}
 }

@@ -21,6 +21,21 @@ type ScoredID struct {
 	Distance float64
 }
 
+type nativeIndex interface {
+	Reserve(capacity uint) error
+	Add(key usearch.Key, vector []float32) error
+	Search(vector []float32, limit uint) ([]usearch.Key, []float32, error)
+	Remove(key usearch.Key) error
+	Len() (uint, error)
+	SerializedLength() (uint, error)
+	SaveBuffer(buf []byte, size uint) error
+	LoadBuffer(buf []byte, size uint) error
+	Destroy() error
+	ChangeThreadsSearch(threads uint) error
+	ChangeThreadsAdd(threads uint) error
+	Clear() error
+}
+
 // VectorIndex is the persistence-agnostic vector ANN API used by the store.
 type VectorIndex interface {
 	Add(id string, vector []float32) error
@@ -40,11 +55,22 @@ const fileMagic = "IMV1"
 // USearchIndex implements VectorIndex using USearch HNSW with F16 storage and cosine metric.
 type USearchIndex struct {
 	mu        sync.RWMutex
-	idx       *usearch.Index
+	idx       nativeIndex
 	keyToID   map[usearch.Key]string
 	idToKey   map[string]usearch.Key
 	dims      int
 	cachePath string
+	reserved  uint
+}
+
+func newUSearchIndexWithNative(idx nativeIndex, dims int, cachePath string) *USearchIndex {
+	return &USearchIndex{
+		idx:       idx,
+		keyToID:   make(map[usearch.Key]string),
+		idToKey:   make(map[string]usearch.Key),
+		dims:      dims,
+		cachePath: cachePath,
+	}
 }
 
 // OpenVectorIndex loads a composite cache file or rebuilds from rebuildFunc.
@@ -60,19 +86,14 @@ func OpenVectorIndex(cachePath string, dims int, rebuildFunc func() (map[string]
 	conf.Metric = usearch.Cosine
 	conf.Quantization = usearch.F16
 
-	u := &USearchIndex{
-		keyToID:   make(map[usearch.Key]string),
-		idToKey:   make(map[string]usearch.Key),
-		dims:      dims,
-		cachePath: cachePath,
-	}
+	u := newUSearchIndexWithNative(nil, dims, cachePath)
 
 	data, err := os.ReadFile(cachePath)
 	if err == nil && len(data) > 4 {
 		if string(data[0:4]) == fileMagic {
 			if err := u.loadFromCompound(data, conf); err == nil {
 				_ = u.idx.ChangeThreadsSearch(16) //nolint:errcheck // best-effort tuning
-				_ = u.idx.ChangeThreadsAdd(4)      //nolint:errcheck
+				_ = u.idx.ChangeThreadsAdd(4)     //nolint:errcheck
 				return u, nil
 			}
 		}
@@ -84,7 +105,7 @@ func OpenVectorIndex(cachePath string, dims int, rebuildFunc func() (map[string]
 	}
 	u.idx = idx
 	_ = u.idx.ChangeThreadsSearch(16) //nolint:errcheck
-	_ = u.idx.ChangeThreadsAdd(4)      //nolint:errcheck
+	_ = u.idx.ChangeThreadsAdd(4)     //nolint:errcheck
 
 	m, err := rebuildFunc()
 	if err != nil {
@@ -147,6 +168,7 @@ func (u *USearchIndex) loadFromCompound(data []byte, conf usearch.IndexConfig) e
 		u.keyToID[k] = logical
 		u.idToKey[logical] = k
 	}
+	u.reserved = uint(len(keyMap))
 	return nil
 }
 
@@ -167,12 +189,12 @@ func (u *USearchIndex) importEmbeddingsLocked(m map[string][]float32) error {
 	if len(m) == 0 {
 		return nil
 	}
-	if err := u.idx.Reserve(uint(len(m))); err != nil {
-		return fmt.Errorf("vecindex: reserve: %w", err)
-	}
 	for id, vec := range m {
 		if len(vec) != u.dims {
 			return fmt.Errorf("vecindex: dimension mismatch for %q: got %d want %d", id, len(vec), u.dims)
+		}
+		if err := u.ensureWriteCapacityLocked(len(u.idToKey) + 1); err != nil {
+			return err
 		}
 		k := u.hashID(id)
 		u.keyToID[k] = id
@@ -181,6 +203,27 @@ func (u *USearchIndex) importEmbeddingsLocked(m map[string][]float32) error {
 			return fmt.Errorf("vecindex: add %q: %w", id, err)
 		}
 	}
+	return nil
+}
+
+func (u *USearchIndex) ensureWriteCapacityLocked(nextCount int) error {
+	if nextCount <= 0 {
+		return nil
+	}
+	if uint(nextCount) <= u.reserved {
+		return nil
+	}
+	target := u.reserved
+	if target == 0 {
+		target = 1
+	}
+	for target < uint(nextCount) {
+		target *= 2
+	}
+	if err := u.idx.Reserve(target); err != nil {
+		return fmt.Errorf("vecindex: reserve: %w", err)
+	}
+	u.reserved = target
 	return nil
 }
 
@@ -194,6 +237,9 @@ func (u *USearchIndex) Add(id string, vector []float32) error {
 	if old, had := u.idToKey[id]; had {
 		delete(u.keyToID, old)
 		_ = u.idx.Remove(old) //nolint:errcheck // replace path
+	}
+	if err := u.ensureWriteCapacityLocked(len(u.idToKey) + 1); err != nil {
+		return err
 	}
 	k := u.hashID(id)
 	u.keyToID[k] = id
@@ -367,5 +413,6 @@ func (u *USearchIndex) ResetFromEmbeddings(m map[string][]float32) error {
 	}
 	u.keyToID = make(map[usearch.Key]string)
 	u.idToKey = make(map[string]usearch.Key)
+	u.reserved = 0
 	return u.importEmbeddingsLocked(m)
 }

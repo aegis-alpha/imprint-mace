@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     && cmake --build build_release --config Release -j$(nproc)
 
 FROM golang:1.26-bookworm AS builder
+ARG IMPRINT_VERSION=dev
 COPY --from=usearch-builder /tmp/usearch/build_release/libusearch_c.so /usr/local/lib/
 COPY --from=usearch-builder /tmp/usearch/c/usearch.h /usr/local/include/
 RUN apt-get update && apt-get install -y gcc libsqlite3-dev ca-certificates && ldconfig
@@ -19,7 +20,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=1 CGO_CFLAGS="-I/usr/local/include" CGO_LDFLAGS="-L/usr/local/lib -lusearch_c" go build -tags sqlite_fts5 -o /imprint ./cmd/imprint
+RUN CGO_ENABLED=1 CGO_CFLAGS="-I/usr/local/include" CGO_LDFLAGS="-L/usr/local/lib -lusearch_c" go build -tags sqlite_fts5 -ldflags "-X main.version=${IMPRINT_VERSION}" -o /imprint ./cmd/imprint
 
 FROM debian:bookworm-slim
 COPY --from=usearch-builder /tmp/usearch/build_release/libusearch_c.so /usr/local/lib/

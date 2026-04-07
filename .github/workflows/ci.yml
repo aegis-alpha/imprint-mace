@@ -81,12 +81,16 @@ jobs:
           CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
         run: go vet -tags sqlite_fts5 ./...
 
+      - name: Compute build version
+        id: version
+        run: echo "value=$(./tools/scripts/compute-version.sh)" >> "$GITHUB_OUTPUT"
+
       - name: Build
         env:
           CGO_ENABLED: "1"
           CGO_CFLAGS: -I/usr/local/include
           CGO_LDFLAGS: -L/usr/local/lib -lusearch_c
-        run: go build -tags sqlite_fts5 -o imprint ./cmd/imprint
+        run: go build -tags sqlite_fts5 -ldflags "-X main.version=${{ steps.version.outputs.value }}" -o imprint ./cmd/imprint
 
       - name: Retrieval eval
         run: ./imprint eval-retrieval --no-embedder --format=table
@@ -183,6 +187,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Compute image version
+        id: version
+        run: echo "value=$(./tools/scripts/compute-version.sh)" >> "$GITHUB_OUTPUT"
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -191,6 +198,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           push: true
+          build-args: |
+            IMPRINT_VERSION=${{ steps.version.outputs.value }}
           tags: |
             ghcr.io/aegis-alpha/imprint-mace:main
             ghcr.io/aegis-alpha/imprint-mace:${{ github.sha }}

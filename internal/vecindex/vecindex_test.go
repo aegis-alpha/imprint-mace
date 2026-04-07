@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 func skipIfUSearchBroken(t *testing.T) {
@@ -159,7 +161,7 @@ func TestVectorIndex_RebuildFromSQLite(t *testing.T) {
 	path := filepath.Join(dir, "rebuild.vecindex")
 	_ = os.Remove(path)
 	data := map[string][]float32{
-		"fact:1":   {1, 0},
+		"fact:1":  {1, 0},
 		"chunk:2": {0, 1},
 	}
 	u, err := OpenVectorIndex(path, 2, func() (map[string][]float32, error) {
@@ -198,4 +200,112 @@ func TestVectorIndex_ConcurrentReadWrite(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+type fakeNativeIndex struct {
+	reserved uint
+	added    map[usearch.Key][]float32
+
+	reserveCalls int
+	addCalls     int
+	removeCalls  int
+	clearCalls   int
+}
+
+func newFakeNativeIndex() *fakeNativeIndex {
+	return &fakeNativeIndex{
+		added: make(map[usearch.Key][]float32),
+	}
+}
+
+func (f *fakeNativeIndex) Reserve(capacity uint) error {
+	f.reserveCalls++
+	if capacity > f.reserved {
+		f.reserved = capacity
+	}
+	return nil
+}
+
+func (f *fakeNativeIndex) Add(key usearch.Key, vector []float32) error {
+	f.addCalls++
+	if uint(len(f.added)) >= f.reserved {
+		return fmt.Errorf("fake native add without reserve: added=%d reserved=%d", len(f.added), f.reserved)
+	}
+	cp := append([]float32(nil), vector...)
+	f.added[key] = cp
+	return nil
+}
+
+func (f *fakeNativeIndex) Search(vector []float32, limit uint) ([]usearch.Key, []float32, error) {
+	return nil, nil, nil
+}
+
+func (f *fakeNativeIndex) Remove(key usearch.Key) error {
+	f.removeCalls++
+	delete(f.added, key)
+	return nil
+}
+
+func (f *fakeNativeIndex) Len() (uint, error) {
+	return uint(len(f.added)), nil
+}
+
+func (f *fakeNativeIndex) SerializedLength() (uint, error) {
+	return 0, nil
+}
+
+func (f *fakeNativeIndex) SaveBuffer([]byte, uint) error {
+	return nil
+}
+
+func (f *fakeNativeIndex) LoadBuffer([]byte, uint) error {
+	return nil
+}
+
+func (f *fakeNativeIndex) Destroy() error {
+	return nil
+}
+
+func (f *fakeNativeIndex) ChangeThreadsSearch(uint) error {
+	return nil
+}
+
+func (f *fakeNativeIndex) ChangeThreadsAdd(uint) error {
+	return nil
+}
+
+func (f *fakeNativeIndex) Clear() error {
+	f.clearCalls++
+	f.added = make(map[usearch.Key][]float32)
+	return nil
+}
+
+func TestUSearchIndex_AddReservesFreshIndexBeforeFirstWrite(t *testing.T) {
+	native := newFakeNativeIndex()
+	idx := newUSearchIndexWithNative(native, 3, filepath.Join(t.TempDir(), "fresh.vecindex"))
+
+	if err := idx.Add("fact:fresh", []float32{1, 0, 0}); err != nil {
+		t.Fatalf("first Add() should reserve before writing: %v", err)
+	}
+	if native.reserveCalls == 0 {
+		t.Fatal("expected first Add() to reserve native capacity")
+	}
+	if native.addCalls != 1 {
+		t.Fatalf("expected one native add, got %d", native.addCalls)
+	}
+}
+
+func TestUSearchIndex_AddGrowsCapacityAcrossRepeatedWrites(t *testing.T) {
+	native := newFakeNativeIndex()
+	idx := newUSearchIndexWithNative(native, 3, filepath.Join(t.TempDir(), "grow.vecindex"))
+
+	if err := idx.Add("fact:1", []float32{1, 0, 0}); err != nil {
+		t.Fatalf("first Add(): %v", err)
+	}
+	if err := idx.Add("fact:2", []float32{0, 1, 0}); err != nil {
+		t.Fatalf("second Add() should grow capacity before writing: %v", err)
+	}
+	if native.reserved < 2 {
+		t.Fatalf("expected reserved capacity >= 2 after repeated adds, got %d", native.reserved)
+	}
 }

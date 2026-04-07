@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-04-07
+
+### Fixed
+
+- USearch write-path safety is now enforced centrally in `internal/vecindex.USearchIndex`: capacity reservation happens inside the wrapper before every native `Add()`, so the first write on a fresh index and later growth writes no longer depend on caller discipline.
+- Commands and long-running processes that require vector writes now fail fast at startup when `[vector].mode = "read-write"` and the USearch subprocess self-test cannot guarantee safe writes. The self-test covers fresh add, repeated add, save/load, and search after reload.
+- Vector backend mode is now explicit and operator-controlled: `read-write`, `read-only`, or `disabled`. `read-only` remains searchable but blocks vector writes centrally instead of silently degrading.
+- Retrieval eval is decoupled from native USearch ANN. `imprint eval-retrieval` now uses a pure-Go exact vector backend for harness determinism and portability, avoiding native USearch crashes in eval-only workflows.
+- Dev build identity is no longer anonymous when the release stamping path is used from CI or Docker main-branch builds. `tools/scripts/compute-version.sh` now emits the next patch-line dev version by default (for this release line: `v0.7.1-dev+<shortsha>`), while exact clean tags still emit the plain release semver.
+- Version output is now consistent across `imprint version`, `imprint --version`, `GET /status`, MCP server initialize metadata, CI builds, and Docker main-branch image builds.
+- Update-check logic now skips stamped dev builds correctly, so builds like `v0.7.1-dev+<shortsha>` are not treated as stable releases when checking GitHub Releases.
+- `GET /status` now serializes `stats` and `query_stats` in documented snake_case JSON instead of leaking Go struct field names in PascalCase.
+
 ## [0.7.0] - 2026-04-06
 
 ### Added
